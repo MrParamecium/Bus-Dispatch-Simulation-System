@@ -2,7 +2,7 @@
   Episode50 可视化：
   - 读取 web/data/*.json
   - 使用高德地图绘制路线与站点
-  - 基于 frames 做车辆位置动画；支持播放/暂停、倍速
+  - 已移除前端车辆运行/动画逻辑
 */
 
 const DATA_BASE = './data';
@@ -17,34 +17,13 @@ const state = {
   map: null,
   polyline: null,
   stations: [], // {id, name, x, spacing}
-  frames: [],   // [{t, buses: [{id, x, status, v, pax, seg, spotType}]}]
   stats: null,
-  // 播放
-  timer: null,
-  speed: 1,
-  frameIndex: 0,
-  markersByBus: new Map(),
   routeLngLats: [], // polyline 的经纬度序列
   routeLength: 0,
   realStops: null,
   stationMarkers: [],
   stationLabels: [],
-  totalFrames: 0,
   stopXs: [], // 站点沿路线的累计距离（米）
-  infoWindow: null, // 悬浮信息窗口
-  // 简化调度仿真模式
-  simMode: true,
-  sim: {
-    busCount: 0,
-    headwaySec: 300,   // 每5分钟一辆
-    baseSpeed: 7.0,    // m/s，约25.2km/h
-    dwellSec: 20,      // 每站停靠时长
-    timeSec: 0,        // 当前仿真时间
-    totalSpanSec: 0,   // 整个回放跨度（含最后一辆发车+全程）
-    timeline: null,    // 从日志构建的分段 schedule
-    tMin: 0,
-    tMax: 0,
-  },
 };
 
 // 可选：自定义一条近似 57 路的 polyline 经纬度（若无后端提供坐标，可用该简化路径）
@@ -76,12 +55,6 @@ function initMap() {
     zoom: 12,
     center: DEFAULT_ROUTE[0],
     viewMode: '3D',
-  });
-
-  // 通用信息窗口（鼠标悬停展示）
-  state.infoWindow = new AMap.InfoWindow({
-    isCustom: false,
-    offset: new AMap.Pixel(0, -20)
   });
 
   state.polyline = new AMap.Polyline({
@@ -219,115 +192,6 @@ async function loadRealRouteFromAmap(lineName = '57路', city = '北京') {
   return { path, stops };
 }
 
-function createOrUpdateBusMarker(bus) {
-  let mk = state.markersByBus.get(bus.id);
-  if (!mk) {
-    const icon = new AMap.Icon({
-      image: 'bus.png',
-      size: new AMap.Size(70, 70),
-      imageSize: new AMap.Size(70, 70),
-    });
-    mk = new AMap.Marker({
-      icon,
-      anchor: 'center',
-      offset: new AMap.Pixel(0, -12),
-      zIndex: 110,
-    });
-    state.map.add(mk);
-    state.markersByBus.set(bus.id, mk);
-
-    // 仅绑定一次悬停事件
-    mk.on('mouseover', () => {
-      const d = mk.getExtData() || {};
-      const parts = [
-        `Bus ${d.id ?? ''}`,
-        d.status ? `状态：${statusText(d.status)}` : '',
-        (typeof d.v_log === 'number' && d.v_log > 0) ? `log速：${d.v_log} km/h` : '',
-        (typeof d.dis_log === 'number' && d.dis_log > 0) ? `段已行驶：${d.dis_log} m` : '',
-        (typeof d.pax === 'number') ? `车上：${Math.round(d.pax)}` : ''
-      ].filter(Boolean).join('<br/>');
-      state.infoWindow.setContent(`<div style="min-width:160px;color:#111;line-height:1.4;font-size:14px">${parts}</div>`);
-      state.infoWindow.open(state.map, mk.getPosition());
-    });
-    mk.on('mouseout', () => {
-      state.infoWindow && state.infoWindow.close();
-    });
-  }
-  // 仅在停靠时吸附到站点，避免行驶过程中来回跳动
-  const near = nearestStopX(bus.x, 30); // 阈值 30m 更稳
-  const isDwelling = !!(bus.status && bus.status.indexOf('dwelling') !== -1);
-  const xToUse = (isDwelling && near.near) ? near.stopX : bus.x;
-  const pos = projectDistanceToPolyline(state.routeLngLats, xToUse, state.routeLength);
-  if (pos) mk.setPosition(pos);
-  // 更新悬浮所需数据
-  mk.setExtData({
-    id: bus.id,
-    status: bus.status,
-    v_log: bus.v_log,
-    dis_log: bus.dis_log,
-    pax: bus.pax
-  });
-  mk.setTitle(`Bus ${bus.id}`);
-}
-
-function renderFrame(i) {
-  // 仿真渲染：根据当前时间生成车辆位置
-  const { active, all } = getBusesFromTimeline(state.sim.timeSec);
-  // 地图上展示：在途 + 已到达（未发车的不显示）
-  const visible = all.filter(b => b.status !== 'not_departed');
-  // 清理不存在的车辆（以可见集合为准）
-  const presentIds = new Set(visible.map(b => b.id));
-  for (const [busId, marker] of state.markersByBus.entries()) {
-    if (!presentIds.has(busId)) { state.map.remove(marker); state.markersByBus.delete(busId); }
-  }
-  // 更新或创建
-  for (const b of visible) createOrUpdateBusMarker(b);
-  renderSidePanel({ buses: all });
-  // 显示端取两位小数，避免浮点尾数
-  const t = Math.round(state.sim.timeSec * 100) / 100;
-  const total = state.sim.totalSpanSec || 0;
-  $('clock').innerText = `${formatClock(t, 2)} / ${formatClock(Math.floor(total), 0)}`;
-  $('seekRange').value = Math.floor((t / Math.max(1, total)) * 100);
-}
-
-function renderSidePanel(frame) {
-  $('busList').innerHTML = '';
-  const busesSorted = [...frame.buses].sort((a, b) => a.id - b.id);
-  for (const b of busesSorted) {
-    const li = document.createElement('li');
-    li.className = 'bus-item';
-    const badge = document.createElement('span');
-    let cls = 'run'; let text = '行驶';
-    if (b.status === 'not_departed') { cls = 'pending'; text = '未发车'; }
-    else if (b.status === 'arrived_terminal') { cls = 'arrived'; text = '到达'; }
-    else if (busIsDwelling(b)) { cls = 'stop'; text = '停靠'; }
-    badge.className = 'badge ' + cls;
-    badge.innerText = text;
-    li.appendChild(badge);
-
-    const labelEl = document.createElement('span');
-    const meta = document.createElement('div');
-    meta.className = 'bus-meta';
-    const line1 = document.createElement('div');
-    line1.innerText = `Bus ${b.id}`;
-    const line2 = document.createElement('div');
-    const vLogTxt = (typeof b.v_log === 'number' && b.v_log > 0) ? `log速: ${b.v_log} km/h` : '';
-    const disTxt = (typeof b.dis_log === 'number' && b.dis_log > 0) ? `段已行驶: ${b.dis_log} m` : '';
-    const paxTxt = (typeof b.pax === 'number') ? `车上: ${Math.round(b.pax)}` : '';
-    line2.innerText = [
-      `v: ${b.v}`,
-      vLogTxt,
-      disTxt,
-      paxTxt
-    ].filter(Boolean).join(' | ');
-    meta.appendChild(line1);
-    meta.appendChild(line2);
-    li.appendChild(meta);
-
-    $('busList').appendChild(li);
-  }
-}
-
 function buildRouteCumLen(path) {
   const acc = [0];
   for (let i = 1; i < path.length; i++) {
@@ -348,25 +212,6 @@ function computeStopXsFromRoute(path, stopLngLats) {
     return cum[minIdx];
   });
 }
-
-function nearestStopX(x, thresholdMeters) {
-  if (!state.stopXs || state.stopXs.length === 0) return { near: false, stopX: x };
-  let best = state.stopXs[0];
-  let minAbs = Math.abs(x - best);
-  for (let i = 1; i < state.stopXs.length; i++) {
-    const diff = Math.abs(x - state.stopXs[i]);
-    if (diff < minAbs) { minAbs = diff; best = state.stopXs[i]; }
-  }
-  return { near: minAbs <= (thresholdMeters || 50), stopX: best };
-}
-
-function busIsDwelling(bus) {
-  // 在“时间线驱动”模式下，v 为 0 不代表停靠。
-  // 仅依据状态判断是否停靠，避免靠站附近被误判。
-  const rawDwelling = !!(bus.status && bus.status.indexOf('dwelling') !== -1);
-  return rawDwelling;
-}
-
 function updateStatsPanel() {
   if (!state.stats) return;
   $('statBus').innerText = String(state.stats.bus_count);
@@ -375,134 +220,15 @@ function updateStatsPanel() {
   $('statDuration').innerText = String(state.stats.duration_min);
 }
 
-function prepareTimelinePlayback(timelineJson) {
-  const m = timelineJson || {};
-  state.sim.timeline = m.segments_by_bus || {};
-  state.sim.tMin = m.t_min || 0;
-  state.sim.tMax = m.t_max || 0;
-  state.sim.timeSec = 0;
-  state.sim.totalSpanSec = Math.max(1, state.sim.tMax - state.sim.tMin);
-  state.stopXs = state.stations.map(s => s.x);
-
-  // 将“停在最后一站(如34)”的车辆，改造为在 [t0,t1] 以内跑完最后 34→35 段，
-  // 使其在日志最后时刻恰好到达终点（仅调整这一段速度，不改前段时间）
-  const totalLen = state.stopXs.length ? state.stopXs[state.stopXs.length - 1] : 0;
-  for (const busId of Object.keys(state.sim.timeline)) {
-    const segs = state.sim.timeline[busId];
-    if (!Array.isArray(segs) || segs.length === 0) continue;
-    const last = segs[segs.length - 1];
-    if (last && last.type === 'dwell' && typeof last.x === 'number') {
-      const dx = totalLen - last.x;
-      const dt = (last.t1 ?? 0) - (last.t0 ?? 0);
-      if (dx > 1 && dt > 0) {
-        const v = dx / dt;
-        segs[segs.length - 1] = {
-          type: 'run',
-          t0: last.t0,
-          t1: last.t1,
-          x0: last.x,
-          x1: totalLen,
-          v_mps: v,
-          v_kmh: v * 3.6,
-          pax_avg: last.pax_avg
-        };
-      }
-    }
-    // 若最后为运行段且终点未到总里程，则追加一个“尾段”在最后一秒补齐至终点
-    const lastRun = segs[segs.length - 1];
-    if (lastRun && lastRun.type === 'run' && typeof lastRun.x1 === 'number') {
-      const dx2 = totalLen - lastRun.x1;
-      if (dx2 > 1) {
-        const t1 = lastRun.t1;
-        const t0 = Math.max((t1 || 0) - 1, (lastRun.t0 || 0));
-        const dt = Math.max(1, (t1 || 0) - t0);
-        const v = dx2 / dt;
-        segs.push({
-          type: 'run',
-          t0,
-          t1,
-          x0: lastRun.x1,
-          x1: totalLen,
-          v_mps: v,
-          v_kmh: v * 3.6,
-          pax_avg: lastRun.pax_avg
-        });
-      }
-    }
-  }
-}
-
-function interpolateRun(x0, x1, t0, t1, t) {
-  if (t <= t0) return x0;
-  if (t >= t1) return x1;
-  const r = (t - t0) / (t1 - t0);
-  return x0 + (x1 - x0) * r;
-}
-
-function getBusesFromTimeline(tSec) {
-  // 禁用小车运行与渲染
-  return { active: [], all: [] };
-}
-
-function statusText(status) {
-  if (!status) return '';
-  if (status.indexOf('not_departed') !== -1) return '未发车';
-  if (status.indexOf('arrived_terminal') !== -1) return '到达';
-  if (status.indexOf('dwelling') !== -1) return '停靠';
-  return '行驶';
-}
-
-function formatClock(sec, decimals) {
-  let total = Math.max(0, sec);
-  let m = Math.floor(total / 60);
-  let s = total - m * 60;
-  if (decimals && decimals > 0) {
-    const pow = Math.pow(10, decimals);
-    s = Math.round(s * pow) / pow; // 四舍五入到指定位数
-    if (s >= 60) { m += 1; s = 0; }
-    const intSec = Math.floor(s);
-    const frac = (Math.round((s - intSec) * pow) / pow).toFixed(decimals).slice(1); // like .ss
-    const intStr = String(intSec).padStart(2, '0');
-    return `${m}:${intStr}${frac}`;
-  } else {
-    s = Math.round(s);
-    if (s >= 60) { m += 1; s = 0; }
-    return `${m}:${String(s).padStart(2, '0')}`;
-  }
-}
-
-function play() {
-  stop();
-  // 平滑推进：固定 30fps，根据 speed 按比例推进时间
-  const fps = 30;
-  const interval = Math.max(16, Math.floor(1000 / fps));
-  state.timer = setInterval(() => {
-    const deltaSec = state.speed * (interval / 1000);
-    state.sim.timeSec += deltaSec;
-    if (state.sim.timeSec > state.sim.totalSpanSec) state.sim.timeSec = 0;
-    renderFrame(0);
-  }, interval);
-}
-
-function stop() {
-  if (state.timer) {
-    clearInterval(state.timer);
-    state.timer = null;
-  }
-}
-
 async function bootstrap() {
   initMap();
   // 加载数据
-  const [stationsJson, statsJson, timelineJson] = await Promise.all([
+  const [stationsJson, statsJson] = await Promise.all([
     loadJSON(`${DATA_BASE}/stations.json`),
     loadJSON(`${DATA_BASE}/stats.json`),
-    loadJSON(`${DATA_BASE}/timeline.json`),
   ]);
   state.stations = stationsJson.stations || [];
   state.stats = statsJson || {};
-  // 基于日志时间线驱动
-  prepareTimelinePlayback(timelineJson);
   updateStatsPanel();
 
   // 先尝试拉取真实 57 路路径与站点
@@ -518,32 +244,6 @@ async function bootstrap() {
 
   // 绘制站点（真实/投影）并准备路线几何
   drawStationsOnRoute();
-  renderFrame(0);
-
-  // 事件
-  $('btnPlay').onclick = () => play();
-  $('btnPause').onclick = () => stop();
-  $('speedRange').oninput = (e) => {
-    const v = parseFloat(e.target.value);
-    state.speed = v;
-    $('speedText').innerText = `${v}x`;
-    if (state.timer) play(); // 重启定时器以应用新速度
-  };
-
-  // 进度条拖动跳播
-  let isSeeking = false;
-  $('seekRange').addEventListener('input', (e) => {
-    if (!isSeeking) { stop(); isSeeking = true; }
-    const pct = parseInt(e.target.value, 10) / 100;
-    const t = Math.round(pct * Math.max(1, state.sim.totalSpanSec));
-    state.sim.timeSec = t;
-    renderFrame(0);
-  });
-  $('seekRange').addEventListener('change', () => {
-    isSeeking = false;
-    // 不自动恢复播放，由用户点击“播放”控制；如需自动继续，请取消下一行注释
-    // play();
-  });
 }
 
 window.addEventListener('DOMContentLoaded', bootstrap);
