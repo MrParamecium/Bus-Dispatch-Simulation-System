@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="56" viewBox="0 0 48 56">
+  <defs>
+    <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
+      <feOffset dy="2"/>
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.25 0"/>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <g filter="url(#shadow)">
+    <circle cx="24" cy="24" r="18" fill="#10b981"/>
+    <path d="M24 56 L16 40 L32 40 Z" fill="#10b981"/>
+    <text x="24" y="30" text-anchor="middle" font-size="18" font-weight="800" fill="#ffffff">起</text>
+  </g>
+</svg>
+
+

@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+  <title>公交车真实数据可视化（Episode 50）</title>
+  <link rel="stylesheet" href="styles.css">
+  <!-- 高德地图 JS API -->
+  <script>window._AMapSecurityConfig = { securityJsCode: 'f1429ace3a567dba843043d54270ed2d' };</script>
+  <script src="https://webapi.amap.com/maps?v=2.0&key=a554d1e1748687479074aaaf9b5d5000"></script>
+</head>
+<body>
+  <div class="app">
+    <header class="app-header">
+      <div class="title">公交车真实数据可视化</div>
+      <div class="episode">Episode 50</div>
+      <div class="controls">
+        <button id="btnPlay" class="btn primary">播放</button>
+        <button id="btnPause" class="btn">暂停</button>
+        <label class="speed-label">速度
+          <input id="speedRange" type="range" min="0.25" max="5" step="0.25" value="1">
+          <span id="speedText">1x</span>
+        </label>
+        <div class="seek">
+          <input id="seekRange" type="range" min="0" max="100" step="1" value="0">
+          <span id="clock">--:-- / --:--</span>
+        </div>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="map-panel">
+        <div id="map" class="map"></div>
+      </section>
+      <aside class="side">
+        <div class="card">
+          <div class="card-title">统计信息</div>
+          <div class="stats">
+            <div class="stat"><div class="stat-value" id="statBus">-</div><div class="stat-label">公交数量</div></div>
+            <div class="stat"><div class="stat-value" id="statSpeed">-</div><div class="stat-label">平均速度(KM/H)</div></div>
+            <div class="stat"><div class="stat-value" id="statPax">-</div><div class="stat-label">总乘客数(条目)</div></div>
+            <div class="stat"><div class="stat-value" id="statDuration">-</div><div class="stat-label">模拟时长(分钟)</div></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">公交车状态</div>
+          <ul id="busList" class="bus-list"></ul>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
+
+
