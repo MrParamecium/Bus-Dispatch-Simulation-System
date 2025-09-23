@@ -14,6 +14,14 @@
     <header class="app-header">
       <div class="title">公交车真实数据可视化</div>
       <div class="episode">Episode 50</div>
+      <div class="controls">
+        <button id="btnPlay" class="btn primary">播放</button>
+        <button id="btnPause" class="btn">暂停</button>
+        <div class="seek">
+          <input id="seekRange" type="range" min="0" max="100" step="1" value="0">
+          <span id="clock">--:-- / --:--</span>
+        </div>
+      </div>
     </header>
 
     <main class="layout">
