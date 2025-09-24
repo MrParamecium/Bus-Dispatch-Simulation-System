@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-  <title>公交车真实数据可视化（Episode 50）</title>
+  <title>Naive_DDPG 算法车辆运行模拟</title>
   <link rel="stylesheet" href="styles.css">
   <!-- 高德地图 JS API -->
   <script>window._AMapSecurityConfig = { securityJsCode: 'f1429ace3a567dba843043d54270ed2d' };</script>
@@ -18,11 +18,11 @@
       </div>
     </div>
     <header class="app-header">
-      <div class="title">公交车真实数据可视化</div>
+      <div class="title">Naive_DDPG 算法车辆运行模拟</div>
       <div class="episode">Episode 50</div>
       <div class="controls">
-        <button id="btnPlay" class="btn primary">播放</button>
-        <button id="btnPause" class="btn">暂停</button>
+        <button id="btnToggle" class="btn primary">开始模拟</button>
+        <button id="btnSidebar" class="btn">状态栏</button>
         <label class="speed-label">速度
           <input id="speedRange" type="range" min="0.25" max="10" step="0.25" value="1">
           <span id="speedText">1x</span>
@@ -35,6 +35,17 @@
     </header>
 
     <main class="layout">
+      <aside class="side left-panel" id="leftPanel">
+        <div class="card">
+          <div class="card-title">车辆信息</div>
+          <ul id="busList" class="bus-list"></ul>
+        </div>
+        <div id="leftSplitter" class="splitter-vertical" aria-hidden="true"></div>
+        <div class="card">
+          <div class="card-title">站点信息</div>
+          <ul id="stopList" class="bus-list"></ul>
+        </div>
+      </aside>
       <section class="map-panel">
         <div id="map" class="map"></div>
       </section>

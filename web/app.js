@@ -10,6 +10,8 @@ const DATA_BASE = './data';
 const START_ICON_URL = 'icons/marker-start.svg'; // 绿色“起”
 const END_ICON_URL = 'icons/marker-end.svg';     // 红色“终”
 const VIA_ICON_URL = 'icons/marker-via.svg';     // 蓝色“经”
+// 车辆图标像素偏移（正 y 向下）
+const BUS_MARKER_OFFSET = { x: 0, y: 6 };
 // 高德 Web 服务（REST）Key，用于查询真实公交线路
 const AMAP_WEB_SERVICE_KEY = '301206d11cfeb8fad4d0a3760c14d613';
 
@@ -47,6 +49,9 @@ const state = {
   speedMul: 1,
   strictStatus: true, // 严格按日志状态：run 时移动，dwell 时停靠；不做合成段
   reverseDirection: true, // 使 0 号站映射为最左端（西端）
+  labelShowMinZoom: 15, // 仅在放大(zoom>=15)时显示站名
+  ui: { freezeBusUntil: 0, freezeStopUntil: 0, freezeWindowUntil: 0 },
+  stationHoverMarkers: [],
 };
 
 // 可选：自定义一条近似 57 路的 polyline 经纬度（若无后端提供坐标，可用该简化路径）
@@ -78,6 +83,7 @@ function initMap() {
     zoom: 12,
     center: DEFAULT_ROUTE[0],
     viewMode: '3D',
+    mapStyle: 'amap://styles/dark'
   });
 
   // 悬浮信息窗口
@@ -89,11 +95,15 @@ function initMap() {
   state.polyline = new AMap.Polyline({
     path: DEFAULT_ROUTE,
     isOutline: true,
-    outlineColor: '#663399',
+    outlineColor: '#0a4f33',
     borderWeight: 2,
-    strokeColor: '#FF69B4',
-    strokeOpacity: 0.9,
-    strokeWeight: 6,
+    strokeColor: '#16a34a', // 绿色
+    strokeOpacity: 1,
+    strokeWeight: 8,
+    lineCap: 'round',
+    lineJoin: 'round',
+    showDir: true,
+    dirColor: '#ffffff', // 白色箭头
   });
   state.map.add(state.polyline);
 
@@ -111,13 +121,74 @@ function drawStationsOnRoute() {
     state.map.remove(state.stationLabels);
     state.stationLabels = [];
   }
+  if (state.stationHoverMarkers && state.stationHoverMarkers.length) {
+    state.map.remove(state.stationHoverMarkers);
+    state.stationHoverMarkers = [];
+  }
 
-  const route = state.polyline.getPath();
+  let route = state.polyline.getPath();
+  // 当 reverseDirection=true 时，地图视觉方向反转；为让箭头保持“起点→终点”，对 path 取反
+  if (state.reverseDirection && Array.isArray(route)) {
+    route = route.slice().reverse();
+    state.polyline.setPath(route);
+  }
   state.routeLngLats = route;
   state.routeLength = approximatePolylineLength(route);
 
   // 统一图标
   const makeIcon = (url) => new AMap.Icon({ image: url, size: new AMap.Size(36, 56), imageSize: new AMap.Size(36, 56) });
+  const stopPositions = [];
+  const stopNames = [];
+  const addCircleStop = (lnglat, name) => {
+    // 最外层：白色环
+    const cOuter = new AMap.CircleMarker({
+      center: lnglat,
+      radius: 4.8,
+      strokeColor: '#ffffff',
+      strokeWeight: 2.4,
+      strokeOpacity: 1,
+      fillColor: '#ffffff',
+      fillOpacity: 0,
+      zIndex: 90,
+    });
+    cOuter.setExtData && cOuter.setExtData({ kind: 'circle' });
+    // 次外层：黑色环
+    const cMid = new AMap.CircleMarker({
+      center: lnglat,
+      radius: 3.52,
+      strokeColor: '#000000',
+      strokeWeight: 1.6,
+      strokeOpacity: 1,
+      fillColor: '#000000',
+      fillOpacity: 0,
+      zIndex: 91,
+    });
+    cMid.setExtData && cMid.setExtData({ kind: 'circle' });
+    // 最内层：白色实心圆
+    const cInner = new AMap.CircleMarker({
+      center: lnglat,
+      radius: 2.4,
+      strokeColor: '#ffffff',
+      strokeWeight: 1.6,
+      strokeOpacity: 1,
+      fillColor: '#ffffff',
+      fillOpacity: 1,
+      zIndex: 92,
+    });
+    cInner.setExtData && cInner.setExtData({ kind: 'circle' });
+    state.stationMarkers.push(cOuter, cMid, cInner);
+    if (name) {
+      const text = new AMap.Text({
+        text: name,
+        anchor: 'middle-left',
+        position: lnglat,
+        style: { 'background-color': 'transparent', 'border': 'none', 'color': '#e5e7eb', 'font-size': '12px', 'text-shadow': '0 1px 2px rgba(0,0,0,.6)' },
+        zIndex: 93,
+        offset: new AMap.Pixel(8, -12)
+      });
+      state.stationLabels.push(text);
+    }
+  };
 
   // 若已获取真实站点，优先使用真实站点经纬度
   if (state.realStops && state.realStops.length) {
@@ -127,16 +198,23 @@ function drawStationsOnRoute() {
       if (state.realStops[i].lnglat[0] < state.realStops[westIdx].lnglat[0]) westIdx = i;
     }
     state.realStops.forEach((st, idx) => {
-      let icon = makeIcon(VIA_ICON_URL);
-      if (state.reverseDirection) {
-        if (idx === westIdx) icon = makeIcon(START_ICON_URL);
-        else if (idx === eastIdx) icon = makeIcon(END_ICON_URL);
+      const isStart = state.reverseDirection ? (idx === westIdx) : (idx === eastIdx);
+      const isEnd = state.reverseDirection ? (idx === eastIdx) : (idx === westIdx);
+      if (isStart) {
+        const marker = new AMap.Marker({ position: st.lnglat, icon: makeIcon(START_ICON_URL), anchor: 'bottom-center', title: `${st.name}` });
+        marker.setExtData && marker.setExtData({ kind: 'terminalIcon' });
+        state.stationMarkers.push(marker);
+        addCircleStop(st.lnglat, st.name);
+      } else if (isEnd) {
+        const marker = new AMap.Marker({ position: st.lnglat, icon: makeIcon(END_ICON_URL), anchor: 'bottom-center', title: `${st.name}` });
+        marker.setExtData && marker.setExtData({ kind: 'terminalIcon' });
+        state.stationMarkers.push(marker);
+        addCircleStop(st.lnglat, st.name);
       } else {
-      if (idx === eastIdx) icon = makeIcon(START_ICON_URL);
-      else if (idx === westIdx) icon = makeIcon(END_ICON_URL);
+        addCircleStop(st.lnglat, st.name);
       }
-      const marker = new AMap.Marker({ position: st.lnglat, icon, anchor: 'bottom-center', title: `${st.name}` });
-      state.stationMarkers.push(marker);
+      stopPositions.push(st.lnglat);
+      stopNames.push(st.name);
     });
 
     // 计算这些站点沿 polyline 的累计距离（近似：匹配到最近折线顶点）
@@ -154,16 +232,23 @@ function drawStationsOnRoute() {
         if (positions[i].p[0] < positions[westIdx].p[0]) westIdx = i;
       }
       positions.forEach((item, idx) => {
-        let icon = makeIcon(VIA_ICON_URL);
-        if (state.reverseDirection) {
-          if (idx === westIdx) icon = makeIcon(START_ICON_URL);
-          else if (idx === eastIdx) icon = makeIcon(END_ICON_URL);
+        const isStart = state.reverseDirection ? (idx === westIdx) : (idx === eastIdx);
+        const isEnd = state.reverseDirection ? (idx === eastIdx) : (idx === westIdx);
+        if (isStart) {
+          const marker = new AMap.Marker({ position: item.p, icon: makeIcon(START_ICON_URL), anchor: 'bottom-center', title: item.name });
+          marker.setExtData && marker.setExtData({ kind: 'terminalIcon' });
+          state.stationMarkers.push(marker);
+          addCircleStop(item.p, item.name);
+        } else if (isEnd) {
+          const marker = new AMap.Marker({ position: item.p, icon: makeIcon(END_ICON_URL), anchor: 'bottom-center', title: item.name });
+          marker.setExtData && marker.setExtData({ kind: 'terminalIcon' });
+          state.stationMarkers.push(marker);
+          addCircleStop(item.p, item.name);
         } else {
-        if (idx === eastIdx) icon = makeIcon(START_ICON_URL);
-        else if (idx === westIdx) icon = makeIcon(END_ICON_URL);
+          addCircleStop(item.p, item.name);
         }
-        const marker = new AMap.Marker({ position: item.p, icon, anchor: 'bottom-center', title: item.name });
-        state.stationMarkers.push(marker);
+        stopPositions.push(item.p);
+        stopNames.push(item.name);
       });
 
       // 使用构建数据中的累计距离
@@ -172,26 +257,53 @@ function drawStationsOnRoute() {
   }
 
   if (state.stationMarkers.length) state.map.add(state.stationMarkers);
-  // 为站点 marker 添加悬停，显示实时等待人数（按当前全局时间）
+  if (state.stationLabels.length) state.map.add(state.stationLabels);
+  // 创建纯事件捕获的悬停圈，确保一个站点只触发一次悬停，无论由多少个子标记组成
   const byStop = (state.paxIndex && state.paxIndex.by_stop) ? state.paxIndex.by_stop : {};
-  state.stationMarkers.forEach((marker, idx) => {
-    const stopIdx = mapStopIndex(idx);
-    marker.on('mouseover', () => {
-      const s = byStop[String(stopIdx)] || byStop[stopIdx] || { arrivals: [], boards: [], alights: [] };
+  const nStops = stopPositions.length;
+  const hovers = [];
+  stopPositions.forEach((lnglat, idx) => {
+    const hover = new AMap.CircleMarker({
+      center: lnglat,
+      radius: 12,
+      strokeOpacity: 0,
+      fillOpacity: 0,
+      cursor: 'pointer',
+      zIndex: 200
+    });
+    hover.on('mouseover', () => {
+      const logicalIdx = mapStopIndex(idx);
+      if (logicalIdx === 0) {
+        const html = `<div style="min-width:140px;color:#111;line-height:1.4;font-size:14px">站点 0<br/>始发站</div>`;
+        state.infoWindow && state.infoWindow.setContent(html);
+        state.infoWindow && state.infoWindow.open(state.map, lnglat);
+        return;
+      }
+      if (nStops > 0 && logicalIdx === nStops - 1) {
+        const html = `<div style="min-width:140px;color:#111;line-height:1.4;font-size:14px">站点 ${logicalIdx}<br/>终点站</div>`;
+        state.infoWindow && state.infoWindow.setContent(html);
+        state.infoWindow && state.infoWindow.open(state.map, lnglat);
+        return;
+      }
+      const s = byStop[String(logicalIdx)] || byStop[logicalIdx] || { arrivals: [], boards: [], alights: [] };
       const tNow = state.timeSec || 0;
       const arrs = Array.isArray(s.arrivals) ? s.arrivals : [];
       const brds = Array.isArray(s.boards) ? s.boards : [];
       const arrivedCnt = arrs.filter(t => t <= tNow).length;
       const boardedCnt = brds.filter(t => t <= tNow).length;
       const waiting = Math.max(0, arrivedCnt - boardedCnt);
-      const html = `<div style="min-width:160px;color:#111;line-height:1.4;font-size:14px">
-        站点 ${stopIdx}<br/>站内等待人数：${waiting} 人
-      </div>`;
+      const name = stopNames[idx] || `站点 ${logicalIdx}`;
+      const html = `<div style="min-width:160px;color:#111;line-height:1.4;font-size:14px">站点 ${logicalIdx}<br/>名称：${name}<br/>等待：${waiting} 人</div>`;
       state.infoWindow && state.infoWindow.setContent(html);
-      state.infoWindow && state.infoWindow.open(state.map, marker.getPosition());
+      state.infoWindow && state.infoWindow.open(state.map, lnglat);
     });
-    marker.on('mouseout', () => { state.infoWindow && state.infoWindow.close(); });
+    hover.on('mouseout', () => { state.infoWindow && state.infoWindow.close(); });
+    hovers.push(hover);
   });
+  if (hovers.length) {
+    state.stationHoverMarkers = hovers;
+    state.map.add(hovers);
+  }
 }
 function mapStopIndex(idx) {
   const n = state.stopXs ? state.stopXs.length : 0;
@@ -260,6 +372,32 @@ function projectDistanceToPolyline(path, dist, totalLen) {
   return path[path.length - 1];
 }
 
+// 计算两点间相对于“向右”为 0° 的角度（单位：度，逆时针为正）
+function angleFromLngLat(a, b) {
+  const [lng1, lat1] = extractLngLat(a);
+  const [lng2, lat2] = extractLngLat(b);
+  const toRad = (d) => d * Math.PI / 180;
+  const dx = (lng2 - lng1) * Math.cos(toRad((lat1 + lat2) / 2));
+  const dy = (lat2 - lat1);
+  return Math.atan2(dy, dx) * 180 / Math.PI;
+}
+
+// 沿 polyline 在给定累计距离处的“朝向”（相对于向右 0°）。
+function headingAlongPolyline(path, dist, totalLen) {
+  const EPS = 3; // 米
+  const d0 = Math.max(0, Math.min(dist, totalLen));
+  const d1 = Math.max(0, Math.min(totalLen, d0 + EPS));
+  let p0 = projectDistanceToPolyline(path, d0, totalLen);
+  let p1 = projectDistanceToPolyline(path, d1, totalLen);
+  if (!p0 || !p1) return 0;
+  // 若接近终点导致 p1≈p0，则反向取一点
+  if (Math.abs(p0[0] - p1[0]) < 1e-9 && Math.abs(p0[1] - p1[1]) < 1e-9) {
+    const d2 = Math.max(0, Math.min(totalLen, d0 - EPS));
+    p1 = p0; p0 = projectDistanceToPolyline(path, d2, totalLen) || p0;
+  }
+  return angleFromLngLat(p0, p1);
+}
+
 function parsePolyline(polyline) {
   // "lng,lat;lng,lat;..."
   if (!polyline) return [];
@@ -305,11 +443,11 @@ function createOrUpdateBusMarker(bus) {
   const statusClass = (bus.status === 'dwelling_at_stop') ? 'dwelling' : (bus.status === 'holding' ? 'holding' : 'running');
   const html = `
     <div class="bus-marker">
-      <img src="bus.png" alt="bus"/>
+      <img src="bus3.png" alt="bus"/>
       <div class="bus-badge ${statusClass}">${bus.id}</div>
     </div>`;
   if (!mk) {
-    mk = new AMap.Marker({ content: html, anchor: 'center', offset: new AMap.Pixel(0, -16), zIndex: 110 });
+    mk = new AMap.Marker({ content: html, anchor: 'center', offset: new AMap.Pixel(BUS_MARKER_OFFSET.x, BUS_MARKER_OFFSET.y), zIndex: 110 });
     state.map.add(mk);
     state.markersByBus.set(bus.id, mk);
 
@@ -338,14 +476,31 @@ function createOrUpdateBusMarker(bus) {
     mk.on('mouseout', () => { state.infoWindow && state.infoWindow.close(); });
   } else {
     if (typeof mk.setContent === 'function') mk.setContent(html);
+    if (typeof mk.setOffset === 'function') mk.setOffset(new AMap.Pixel(BUS_MARKER_OFFSET.x, BUS_MARKER_OFFSET.y));
   }
   const totalLen = state.routeLength > 0 ? state.routeLength : (state.stopXs[state.stopXs.length - 1] || 0);
-  const pos = projectDistanceToPolyline(state.routeLngLats, Math.min(bus.x, totalLen), totalLen);
+  const clampedX = Math.min(bus.x, totalLen);
+  const pos = projectDistanceToPolyline(state.routeLngLats, clampedX, totalLen);
   if (pos) mk.setPosition(pos);
+  // 更新朝向：计算 polyline 切向角度（度），并旋转 HTML 内容
+  const deg = headingAlongPolyline(state.routeLngLats, clampedX, totalLen);
+  if (typeof mk.setAngle === 'function') {
+    try { mk.setAngle(deg); } catch (_) {}
+  }
+  try {
+    const content = mk.getContent && mk.getContent();
+    if (content) {
+      const wrap = (typeof content === 'string') ? null : content;
+      if (wrap && wrap.querySelector) {
+        const node = wrap.querySelector('.bus-marker img');
+        if (node) node.style.transform = `rotate(${deg}deg)`;
+      }
+    }
+  } catch(_) {}
   // 标签与扩展数据
   const vKmh = (typeof bus.v_kmh === 'number') ? bus.v_kmh : ((bus.status === 'running_on_link') ? (state.speedMps * 3.6) : 0);
-  const totalForDisplay = state.routeLength > 0 ? state.routeLength : (state.stopXs[state.stopXs.length - 1] || 0);
-  const distFromStart = (!state.reverseDirection) ? bus.x : Math.max(0, totalForDisplay - bus.x);
+  // bus.x 已按 reverseDirection 映射为“从起点累计距离”，展示时不再反转
+  const distFromStart = Math.max(0, bus.x);
   mk.setExtData({ id: bus.id, status: bus.status, v_kmh: vKmh, v_kmh_log: bus.v_kmh_log, v_kmh_inst: bus.v_kmh_inst, x: bus.x, dist_m: distFromStart, pax_onboard: bus.pax_onboard, pax_on: bus.pax_on, pax_off: bus.pax_off });
   mk.setTitle(`Bus ${bus.id}`);
 }
@@ -566,7 +721,8 @@ function getDisplayPositionForSegment(seg, tNow) {
         paxOff = alights.filter(t => t >= t0 && t < t1).length;
       }
     } catch(_) {}
-    return { x, v_kmh: 0, status, pax_onboard: paxOnboard, pax_on: paxOn, pax_off: paxOff };
+    const isTerminal = (typeof seg.stop === 'number') && (seg.stop === ((state.stopXs && state.stopXs.length) ? (state.stopXs.length - 1) : seg.stop));
+    return { x, v_kmh: 0, status, pax_onboard: paxOnboard, pax_on: paxOn, pax_off: paxOff, terminal: isTerminal };
   } else if (seg.type === 'run') {
     let x0, x1;
     // 优先使用 from/to 映射到当前站点
@@ -613,32 +769,113 @@ function getDisplayPositionForSegment(seg, tNow) {
       paxOnboard = seg.pax_avg;
     }
     if (typeof paxOnboard === 'number') paxOnboard = Math.max(0, Math.round(paxOnboard));
-    return { x, v_kmh, v_kmh_log, v_kmh_inst, pax_onboard: paxOnboard, status: 'running_on_link' };
+    return { x, v_kmh, v_kmh_log, v_kmh_inst, pax_onboard: paxOnboard, terminal: false, status: 'running_on_link' };
   }
   return null;
 }
 
 function renderTimelineFrame() {
   const tNow = state.timeSec;
+  const nowTs = Date.now();
+  // 若刚拖动了全局进度条，则恢复窗口滚动位置，避免回弹
+  let winTop;
+  if (nowTs < ((state.ui && state.ui.freezeWindowUntil) || 0)) {
+    const se = document.scrollingElement || document.documentElement || document.body;
+    winTop = se ? se.scrollTop : undefined;
+  }
   const presentIds = new Set();
+  const busListEl = $('busList');
+  const freezeBus = nowTs < ((state.ui && state.ui.freezeBusUntil) || 0);
+  const prevBusScroll = busListEl ? busListEl.scrollTop : 0;
+  if (busListEl && !freezeBus) busListEl.innerHTML = '';
+  const arrivedBuses = [];
   for (const busId of Object.keys(state.segmentsByBus)) {
     const segs = state.segmentsByBus[busId];
     if (!segs || segs.length === 0) continue;
-    if (tNow < state.tMin || tNow > state.tMax) continue;
     const seg = findSegmentForTime(segs, tNow);
     const pos = getDisplayPositionForSegment(seg, tNow);
-    if (!pos) continue;
-    const bus = { id: Number.isFinite(parseInt(busId, 10)) ? parseInt(busId, 10) : busId, x: pos.x, status: pos.status, v_kmh: pos.v_kmh, v_kmh_log: pos.v_kmh_log, v_kmh_inst: pos.v_kmh_inst, pax_onboard: pos.pax_onboard, pax_on: pos.pax_on, pax_off: pos.pax_off };
-    createOrUpdateBusMarker(bus);
-    presentIds.add(String(busId));
+    if (pos) {
+      const bus = { id: Number.isFinite(parseInt(busId, 10)) ? parseInt(busId, 10) : busId, x: pos.x, status: pos.status, v_kmh: pos.v_kmh, v_kmh_log: pos.v_kmh_log, v_kmh_inst: pos.v_kmh_inst, pax_onboard: pos.pax_onboard, pax_on: pos.pax_on, pax_off: pos.pax_off };
+      createOrUpdateBusMarker(bus);
+      presentIds.add(String(busId));
+      if (busListEl && !freezeBus) {
+        const li = document.createElement('li');
+        li.className = 'bus-item';
+        const statusText = bus.status === 'dwelling_at_stop' ? '停靠' : (bus.status === 'holding' ? '等待' : '行驶');
+         const speed = (typeof bus.v_kmh_inst === 'number') ? bus.v_kmh_inst : (bus.v_kmh || 0);
+         const speedFmt = (Number.isFinite(speed) ? (Math.round(speed * 10) / 10).toFixed(1) : '0.0');
+        // 直接展示 bus.x（已是从起点累计距离）
+        const distFromStart = Math.max(0, bus.x);
+        const parts = [
+          `<div class=\"num\">Bus ${bus.id}</div>`,
+          bus.terminal ? `<div>状态：已到达终点站</div>` : `<div>状态：${statusText}</div>`,
+           `<div>速度：${speedFmt} km/h</div>`,
+          `<div>距离：${Math.round(distFromStart)} m</div>`,
+          (typeof bus.pax_onboard === 'number') ? `<div>车内：${bus.pax_onboard} 人</div>` : '',
+          (bus.status === 'dwelling_at_stop' && typeof bus.pax_on === 'number') ? `<div>上车：${bus.pax_on} 人</div>` : '',
+          (bus.status === 'dwelling_at_stop' && typeof bus.pax_off === 'number') ? `<div>下车：${bus.pax_off} 人</div>` : ''
+        ].filter(Boolean).join('');
+        li.innerHTML = `<div class=\"meta\">${parts}</div>`;
+        if (bus.terminal) arrivedBuses.push(li); else busListEl.appendChild(li);
+      }
+    } else if (busListEl && !freezeBus) {
+      // 不在当前片段：可能未发车或已到达终点
+      let firstT = Infinity, lastT = -Infinity;
+      for (const s of segs) {
+        const t0 = (typeof s.t0 === 'number') ? s.t0 : 0;
+        const t1 = (typeof s.t1 === 'number') ? s.t1 : t0;
+        if (t0 < firstT) firstT = t0;
+        if (t1 > lastT) lastT = t1;
+      }
+      const li = document.createElement('li');
+      li.className = 'bus-item';
+      const idText = Number.isFinite(parseInt(busId, 10)) ? parseInt(busId, 10) : busId;
+      if (tNow < firstT) {
+        li.innerHTML = `<div class="meta"><div class="num">Bus ${idText}</div><div>状态：未发车</div><div>速度：0 km/h</div><div>距离：0 m</div></div>`;
+        busListEl.appendChild(li);
+      } else if (tNow >= lastT) {
+        li.innerHTML = `<div class="meta"><div class="num">Bus ${idText}</div><div>状态：已到达终点站</div></div>`;
+        arrivedBuses.push(li);
+      }
+    }
   }
-  // 清理不在当前时刻出现的车辆
+  // 清理不在当前时刻出现的车辆（但终点到达的车保留在列表末尾展示）
   for (const [id, marker] of state.markersByBus.entries()) {
     if (!presentIds.has(String(id))) { state.map.remove(marker); state.markersByBus.delete(id); }
   }
+  if (busListEl && !freezeBus && arrivedBuses.length) arrivedBuses.forEach(li => busListEl.appendChild(li));
+  if (busListEl && !freezeBus) busListEl.scrollTop = prevBusScroll; // 恢复滚动位置，避免拖动滚动条被重置
   const rel = Math.max(0, Math.min(state.totalSpanSec || 1, tNow - state.tMin));
   if ($('clock')) $('clock').innerText = `${formatClock(rel, 0)} / ${formatClock(state.totalSpanSec || 1, 0)}`;
   if ($('seekRange')) $('seekRange').value = String(Math.floor(((rel) / Math.max(1, state.totalSpanSec)) * 100));
+
+  // 站点面板：显示当前“站内等待人数”
+  const stopListEl = $('stopList');
+  const freezeStop = nowTs < ((state.ui && state.ui.freezeStopUntil) || 0);
+  if (stopListEl) {
+    const prevStopScroll = stopListEl.scrollTop;
+    if (!freezeStop) stopListEl.innerHTML = '';
+    const byStop = (state.paxIndex && state.paxIndex.by_stop) ? state.paxIndex.by_stop : {};
+    const n = state.stopXs ? state.stopXs.length : 0;
+    // 从 1 到 n-2（隐藏 0 和 n-1），按自然顺序排列
+    for (let logicalIdx = 1; logicalIdx <= Math.max(0, n - 2); logicalIdx++) {
+      const s = byStop[String(logicalIdx)] || byStop[logicalIdx] || { arrivals: [], boards: [] };
+      const arrs = Array.isArray(s.arrivals) ? s.arrivals : [];
+      const brds = Array.isArray(s.boards) ? s.boards : [];
+      const waiting = Math.max(0, arrs.filter(t => t <= tNow).length - brds.filter(t => t <= tNow).length);
+      if (!freezeStop) {
+        const li = document.createElement('li');
+        li.className = 'bus-item';
+        li.innerHTML = `<div class="meta"><div class="num">站点 ${logicalIdx}</div><div>等待：${waiting} 人</div></div>`;
+        stopListEl.appendChild(li);
+      }
+    }
+    if (!freezeStop) stopListEl.scrollTop = prevStopScroll; // 恢复滚动位置
+  }
+  if (typeof winTop === 'number') {
+    const se = document.scrollingElement || document.documentElement || document.body;
+    if (se) se.scrollTop = winTop;
+  }
 }
 
 function startTimelinePlayback() {
@@ -680,6 +917,11 @@ function busPositionAtLocalTime(localT) {
 function renderUniformFrame() {
   // 计算各车在当前全局时间的位置
   const T = state.cycleDurationSec > 0 ? state.cycleDurationSec : 1;
+  let winTop;
+  if (Date.now() < ((state.ui && state.ui.freezeWindowUntil) || 0)) {
+    const se = document.scrollingElement || document.documentElement || document.body;
+    winTop = se ? se.scrollTop : undefined;
+  }
   for (const b of state.buses) {
     const localT = state.timeSec - b.departTimeSec;
     if (localT < 0) {
@@ -699,6 +941,10 @@ function renderUniformFrame() {
   }
   if ($('seekRange')) {
     $('seekRange').value = String(Math.floor((tNorm / T) * 100));
+  }
+  if (typeof winTop === 'number') {
+    const se = document.scrollingElement || document.documentElement || document.body;
+    if (se) se.scrollTop = winTop;
   }
 }
 
@@ -755,10 +1001,12 @@ function play() {
       renderUniformFrame();
     }
   }, interval);
+  updateToggleButtonUI();
 }
 
 function pause() {
   stopUniformSim();
+  updateToggleButtonUI();
 }
 
 function formatClock(sec, decimals) {
@@ -849,26 +1097,51 @@ async function bootstrap() {
 
   // 绘制站点（真实/投影）并准备路线几何
   drawStationsOnRoute();
-  // 若有日志：仅完成时间线准备与初始时间设置，不立即渲染车辆（保持隐藏）
-  // 无日志则回退统一速度仿真，保持原行为
+  // 若有日志：初始化到全局最早时刻并立即渲染一次，
+  // 这样未点击“播放”前也能看到时钟、车辆与站点信息
+  // 无日志则回退统一速度仿真（其内部已做初始渲染）
   if (timelineJson && timelineJson.segments_by_bus) {
-    state.timeSec = state.tMin || 0; // 延后到用户点击“播放”时再渲染
+    state.timeSec = state.tMin || 0;
+    renderTimelineFrame();
   } else {
     startUniformSim();
   }
   if ($loading) $loading.setAttribute('aria-hidden', 'true');
 
   // 控件事件
-  const btnPlay = $('btnPlay');
-  const btnPause = $('btnPause');
+  const btnToggle = $('btnToggle');
   const seek = $('seekRange');
   const speedRange = $('speedRange');
   const speedText = $('speedText');
-  if (btnPlay) btnPlay.onclick = () => play();
-  if (btnPause) btnPause.onclick = () => pause();
+  if (btnToggle) {
+    btnToggle.onclick = () => { state.isPlaying ? pause() : play(); };
+    updateToggleButtonUI();
+  }
+  const btnSidebar = $('btnSidebar');
+  if (btnSidebar) {
+    btnSidebar.onclick = () => {
+      const panel = $('leftPanel');
+      if (!panel) return;
+      const hidden = panel.classList.toggle('hidden');
+      // 侧栏变化后需要通知地图重算尺寸
+      try { state.map && state.map.resize && state.map.resize(); } catch(_) {}
+      // 冻结两侧列表 300ms，避免滚动回弹
+      const now = Date.now();
+      if (state.ui) { state.ui.freezeBusUntil = now + 300; state.ui.freezeStopUntil = now + 300; }
+      // 更新按钮外观（可选）
+      if (hidden) btnSidebar.classList.remove('primary'); else btnSidebar.classList.add('primary');
+    };
+  }
   if (seek) {
     let wasPlaying = false;
     seek.addEventListener('input', (e) => {
+    // 拖动全局进度条：冻结窗口滚动恢复（避免回弹），但允许列表刷新，确保暂停时状态栏也更新
+    if (state.ui) {
+      const now = Date.now();
+      state.ui.freezeWindowUntil = now + 300;
+      state.ui.freezeBusUntil = 0;
+      state.ui.freezeStopUntil = 0;
+    }
     const pct = parseInt(e.target.value, 10) / 100;
       if (state.totalSpanSec && state.totalSpanSec > 0) {
         // 日志模式：绝对时间范围 [tMin, tMax]
@@ -892,8 +1165,76 @@ async function bootstrap() {
       if (speedText) speedText.innerText = `${state.speedMul}x`;
     });
   }
+
+  // 列表滚动时冻结 DOM 更新 300ms，避免拖滚动条时回弹
+  const freeze = (key) => () => { if (state.ui) state.ui[key] = Date.now() + 300; };
+  const busListDom = $('busList');
+  const stopListDom = $('stopList');
+  if (busListDom) ['scroll','wheel','touchstart','pointerdown'].forEach(ev => busListDom.addEventListener(ev, freeze('freezeBusUntil')));
+  if (stopListDom) ['scroll','wheel','touchstart','pointerdown'].forEach(ev => stopListDom.addEventListener(ev, freeze('freezeStopUntil')));
+
+  // 监听缩放，切换站名可见性
+  const updateLabelVisibility = () => {
+    const show = state.map.getZoom() >= (state.labelShowMinZoom || 15);
+    const z = state.map.getZoom();
+    const showCircles = z >= (state.labelShowMinZoom || 15); // 与站名同阈值：小比例尺隐藏圆点
+    for (const lbl of state.stationLabels) {
+      if (!lbl) continue;
+      if (show) lbl.show && lbl.show(); else lbl.hide && lbl.hide();
+    }
+    // 控制中间站圆点显示；终点/起点图标始终保留
+    for (const mk of state.stationMarkers) {
+      if (!mk || !mk.getExtData) continue;
+      const k = (mk.getExtData() || {}).kind;
+      if (k === 'circle') {
+        if (showCircles) mk.show && mk.show(); else mk.hide && mk.hide();
+      }
+    }
+  };
+  state.map.on('zoomend', updateLabelVisibility);
+  // 以当前比例尺为“临界点”
+  state.labelShowMinZoom = Math.round(state.map.getZoom());
+  updateLabelVisibility();
+
+  // 分隔条拖拽：调整左侧面板宽度
+  const splitter = document.getElementById('leftSplitter');
+  const leftPanel = document.getElementById('leftPanel');
+  if (splitter && leftPanel) {
+    let dragging = false;
+    splitter.addEventListener('mousedown', () => { dragging = true; document.body.style.userSelect = 'none'; });
+    window.addEventListener('mouseup', () => { dragging = false; document.body.style.userSelect = ''; });
+    window.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      // 拖拽的是侧栏内部的分隔条：在 车辆 与 站点 卡片之间伸缩
+      const firstCard = leftPanel.querySelector('.card');
+      if (!firstCard) return;
+      const rect = leftPanel.getBoundingClientRect();
+      const minH = 120; // 车辆卡片最小高度
+      const maxH = Math.max(minH, leftPanel.clientHeight - 160);
+      const newH = Math.max(minH, Math.min(maxH, e.clientY - rect.top));
+      firstCard.style.height = `${newH}px`;
+      firstCard.style.overflow = 'auto';
+      const stopCard = leftPanel.querySelectorAll('.card')[1];
+      if (stopCard) stopCard.style.overflow = 'auto';
+    });
+  }
 }
 
 window.addEventListener('DOMContentLoaded', bootstrap);
 
 
+
+// 切换按钮 UI（播放=绿色，暂停=黄色）
+function updateToggleButtonUI() {
+  const btn = document.getElementById('btnToggle');
+  if (!btn) return;
+  if (state.isPlaying) {
+    btn.classList.remove('primary');
+    btn.classList.add('warning');
+    btn.textContent = '暂停';
+  } else {
+    btn.classList.remove('warning');
+    btn.classList.add('primary');
+    btn.textContent = '开始模拟';
+  }
+}

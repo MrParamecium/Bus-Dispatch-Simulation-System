@@ -1,54 +1,60 @@
 *{box-sizing:border-box}
-html,body{height:100%;margin:0;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:#11002a;color:#f3f3f3}
+html,body{height:100%;margin:0;font-family:"Inter var","Inter","SF Pro Display","SF Pro Text","Helvetica Neue","HarmonyOS Sans","PingFang SC","Hiragino Sans GB","Microsoft YaHei",-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:#0f1115;color:#e5e7eb}
 .app{display:flex;flex-direction:column;height:100%}
-.app-header{display:flex;align-items:center;justify-content:space-between;padding:10px 16px;background:linear-gradient(90deg,#3b82f6,#8b5cf6)}
+.app-header{display:flex;align-items:center;justify-content:space-between;padding:10px 16px;background:#111318;border-bottom:1px solid rgba(255,255,255,.06)}
 .title{font-size:18px;font-weight:700}
-.episode{opacity:.9;margin-left:8px}
+.episode{opacity:.7;margin-left:auto;margin-right:8px}
 .controls{display:flex;align-items:center;gap:8px}
-.btn{border:0;background:#4b5563;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer}
-.btn.primary{background:#10b981}
+.btn{border:0;background:#2b2f36;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer}
+.btn.primary{background:#16a34a}
+.btn.warning{background:#f59e0b}
 .speed-label{display:flex;align-items:center;gap:6px;margin-left:8px}
-.seek{display:flex;align-items:center;gap:8px;margin-left:12px;min-width:280px}
-.seek input[type=range]{width:220px}
-.layout{display:flex;flex:1;padding:12px;gap:12px}
-.map-panel{flex:1 1 100%;background:#1f1140;border-radius:12px;padding:6px}
+.speed-label #speedText{display:inline-block;width:7ch;min-width:7ch;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace}
+.seek{display:flex;align-items:center;gap:8px;margin-left:12px;min-width:420px}
+.seek input[type=range]{flex:0 0 240px}
+.seek #clock{display:inline-block;width:12ch;min-width:12ch;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace}
+.layout{display:flex;flex:1;padding:12px;gap:12px;overflow:hidden}
+.map-panel{flex:1 1 100%;background:#111318;border-radius:12px;padding:6px}
 .map{width:100%;height:100%;border-radius:8px}
-.side{display:none}
-.card{display:none}
-.card-title{display:none}
+.side{display:flex;flex-direction:column;gap:12px;width:320px;overflow:auto}
+.side.hidden{display:none}
+.splitter-vertical{width:6px;cursor:col-resize;background:#1f232b;border-radius:6px;opacity:.8}
+.splitter-vertical:hover{opacity:1}
+.card{display:block;background:#151922;border-radius:12px;padding:10px;border:1px solid rgba(255,255,255,.06)}
+.card-title{display:block;font-weight:700;margin:0 0 8px 0}
 .stats{display:none}
 .stat{display:none}
 .stat-value{display:none}
 .stat-label{display:none}
-.bus-list{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:6px;max-height:60vh;overflow:auto}
-.bus-item{display:flex;align-items:flex-start;justify-content:flex-start;gap:10px;background:#271653;padding:8px;border-radius:8px}
+.bus-list{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:6px;max-height:none;overflow:visible}
+.bus-item{display:flex;align-items:flex-start;justify-content:flex-start;gap:10px;background:#1b1f2a;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,.06)}
 .bus-meta{display:flex;flex-direction:column;gap:2px;line-height:1.3}
-.badge{padding:2px 6px;border-radius:6px;background:#3b82f6}
+.badge{padding:2px 6px;border-radius:6px;background:#374151}
 .badge.stop{background:#f59e0b}
-.badge.run{background:#10b981}
-.badge.pending{background:#64748b}
+.badge.run{background:#16a34a}
+.badge.pending{background:#6b7280}
 .badge.arrived{background:#ef4444}
 
 /* 自定义水滴气泡标记 */
-.marker-bubble{position:absolute;width:36px;height:46px;line-height:36px;border-radius:18px;color:#fff;font-weight:800;text-align:center;box-shadow:0 2px 6px rgba(0,0,0,.25);background:var(--bg,#06b6d4)}
-.marker-bubble::after{content:"";position:absolute;left:50%;bottom:0;transform:translate(-50%,100%);border:10px solid transparent;border-top-color:var(--bg,#06b6d4)}
-.marker-bubble.start{--bg:#10b981}
-.marker-bubble.end{--bg:#ef4444}
-.marker-bubble.via{--bg:#06b6d4}
+.marker-bubble{position:absolute;width:36px;height:46px;line-height:36px;border-radius:18px;color:#fff;font-weight:800;text-align:center;box-shadow:0 2px 6px rgba(0,0,0,.25);background:#374151}
+.marker-bubble::after{content:"";position:absolute;left:50%;bottom:0;transform:translate(-50%,100%);border:10px solid transparent;border-top-color:#374151}
+.marker-bubble.start{background:#16a34a}
+.marker-bubble.end{background:#ef4444}
+.marker-bubble.via{background:#374151}
 
 /* 公交车自定义徽标（更清晰的编号与状态色） */
 .bus-marker{position:relative;display:inline-block}
-.bus-marker img{width:70px;height:70px;display:block;filter:drop-shadow(0 2px 4px rgba(0,0,0,.35))}
-.bus-badge{position:absolute;bottom:100%;left:50%;transform:translate(-50%,-6px);padding:2px 8px;border-radius:999px;background:#10b981;color:#fff;font-weight:900;font-size:13px;line-height:18px;border:2px solid rgba(255,255,255,.9);text-shadow:0 1px 1px rgba(0,0,0,.35);box-shadow:0 2px 6px rgba(0,0,0,.25);pointer-events:none}
-.bus-badge.running{background:#10b981}
+.bus-marker img{height:22px;width:auto;display:block;filter:drop-shadow(0 2px 4px rgba(0,0,0,.35));transform-origin:50% 50%}
+.bus-badge{position:absolute;bottom:100%;left:50%;transform:translate(-50%,-6px);padding:2px 8px;border-radius:999px;background:#16a34a;color:#fff;font-weight:900;font-size:13px;line-height:18px;border:2px solid rgba(255,255,255,.9);text-shadow:0 1px 1px rgba(0,0,0,.35);box-shadow:0 2px 6px rgba(0,0,0,.25);pointer-events:none}
+.bus-badge.running{background:#16a34a}
 .bus-badge.dwelling{background:#f59e0b}
 .bus-badge.holding{background:#ef4444}
 
 /* 加载遮罩 */
-.loading-overlay{position:fixed;inset:0;background:rgba(17,0,42,.9);z-index:1000;display:flex;align-items:center;justify-content:center}
+.loading-overlay{position:fixed;inset:0;background:#0f1115;z-index:1000;display:flex;align-items:center;justify-content:center}
 .loading-overlay[aria-hidden="true"]{display:none}
-.loading-content{display:flex;flex-direction:column;align-items:center;gap:12px;color:#fff}
-.spinner{width:44px;height:44px;border-radius:50%;border:4px solid rgba(255,255,255,.25);border-top-color:#fff;animation:spin 1s linear infinite}
+.loading-content{display:flex;flex-direction:column;align-items:center;gap:12px;color:#e5e7eb}
+.spinner{width:44px;height:44px;border-radius:50%;border:4px solid rgba(229,231,235,.25);border-top-color:#e5e7eb;animation:spin 1s linear infinite}
 .loading-text{font-size:14px;opacity:.9}
 @keyframes spin{to{transform:rotate(360deg)}}
 
