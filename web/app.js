@@ -31,13 +31,21 @@ const state = {
   timeSec: 0,
   speedMps: 0,
   dwellSec: 20,
-  busCount: 0,
+    busCount: 0,
   phases: [], // [{type:'run'|'dwell', t0,t1,x0,x1}]
   cycleDurationSec: 0,
   headwaySec: 0,
   isPlaying: false,
   infoWindow: null,
   busIds: [],
+  // 日志时间线驱动
+    tMin: 0,
+    tMax: 0,
+  totalSpanSec: 0,
+  segmentsByBus: {}, // { [busId]: Array<segment> }, segment: {type:'dwell'|'run', t0,t1, from?, to?, stop?, x0?, x1?}
+  speedMul: 1,
+  strictStatus: true, // 严格按日志状态：run 时移动，dwell 时停靠；不做合成段
+  reverseDirection: true, // 使 0 号站映射为最左端（西端）
 };
 
 // 可选：自定义一条近似 57 路的 polyline 经纬度（若无后端提供坐标，可用该简化路径）
@@ -119,8 +127,13 @@ function drawStationsOnRoute() {
     }
     state.realStops.forEach((st, idx) => {
       let icon = makeIcon(VIA_ICON_URL);
+      if (state.reverseDirection) {
+        if (idx === westIdx) icon = makeIcon(START_ICON_URL);
+        else if (idx === eastIdx) icon = makeIcon(END_ICON_URL);
+      } else {
       if (idx === eastIdx) icon = makeIcon(START_ICON_URL);
       else if (idx === westIdx) icon = makeIcon(END_ICON_URL);
+      }
       const marker = new AMap.Marker({ position: st.lnglat, icon, anchor: 'bottom-center', title: `${st.name}` });
       state.stationMarkers.push(marker);
     });
@@ -141,8 +154,13 @@ function drawStationsOnRoute() {
       }
       positions.forEach((item, idx) => {
         let icon = makeIcon(VIA_ICON_URL);
+        if (state.reverseDirection) {
+          if (idx === westIdx) icon = makeIcon(START_ICON_URL);
+          else if (idx === eastIdx) icon = makeIcon(END_ICON_URL);
+        } else {
         if (idx === eastIdx) icon = makeIcon(START_ICON_URL);
         else if (idx === westIdx) icon = makeIcon(END_ICON_URL);
+        }
         const marker = new AMap.Marker({ position: item.p, icon, anchor: 'bottom-center', title: item.name });
         state.stationMarkers.push(marker);
       });
@@ -154,11 +172,50 @@ function drawStationsOnRoute() {
 
   if (state.stationMarkers.length) state.map.add(state.stationMarkers);
 }
+function mapStopIndex(idx) {
+  const n = state.stopXs ? state.stopXs.length : 0;
+  const clamped = Math.max(0, Math.min(n - 1, idx || 0));
+  if (!state.reverseDirection || n === 0) return clamped;
+  return (n - 1) - clamped;
+}
+
+function mapDistanceX(x) {
+  const total = (state.stopXs && state.stopXs.length) ? (state.stopXs[state.stopXs.length - 1] || 0) : 0;
+  const base = Math.max(0, x || 0);
+  if (!state.reverseDirection) return base;
+  return Math.max(0, total - base);
+}
+
+function extractLngLat(p) {
+  if (!p) return [0, 0];
+  if (Array.isArray(p)) return [p[0], p[1]];
+  if (typeof p.lng === 'number' && typeof p.lat === 'number') return [p.lng, p.lat];
+  return [0, 0];
+}
+
+function haversineDistanceMeters(a, b) {
+  const [lng1, lat1] = extractLngLat(a);
+  const [lng2, lat2] = extractLngLat(b);
+  const toRad = (d) => d * Math.PI / 180;
+  const R = 6371000; // meters
+  const φ1 = toRad(lat1), φ2 = toRad(lat2);
+  const Δφ = toRad(lat2 - lat1);
+  const Δλ = toRad(lng2 - lng1);
+  const s = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
+}
+
+function distanceMeters(a, b) {
+  if (typeof AMap !== 'undefined' && AMap.GeometryUtil && typeof AMap.GeometryUtil.distance === 'function') {
+    try { return AMap.GeometryUtil.distance(a, b); } catch (_) { /* fallthrough */ }
+  }
+  return haversineDistanceMeters(a, b);
+}
 
 function approximatePolylineLength(path) {
   let sum = 0;
   for (let i = 1; i < path.length; i++) {
-    sum += AMap.GeometryUtil.distance(path[i - 1], path[i]);
+    sum += distanceMeters(path[i - 1], path[i]);
   }
   return sum; // 单位：米
 }
@@ -168,11 +225,13 @@ function projectDistanceToPolyline(path, dist, totalLen) {
   const target = Math.max(0, Math.min(dist, totalLen));
   let acc = 0;
   for (let i = 1; i < path.length; i++) {
-    const segLen = AMap.GeometryUtil.distance(path[i - 1], path[i]);
+    const segLen = distanceMeters(path[i - 1], path[i]);
     if (acc + segLen >= target) {
-      const ratio = (target - acc) / segLen;
-      const lng = path[i - 1].lng + (path[i].lng - path[i - 1].lng) * ratio;
-      const lat = path[i - 1].lat + (path[i].lat - path[i - 1].lat) * ratio;
+      const ratio = segLen > 0 ? (target - acc) / segLen : 0;
+      const [lng1, lat1] = extractLngLat(path[i - 1]);
+      const [lng2, lat2] = extractLngLat(path[i]);
+      const lng = lng1 + (lng2 - lng1) * ratio;
+      const lat = lat1 + (lat2 - lat1) * ratio;
       return [lng, lat];
     }
     acc += segLen;
@@ -222,40 +281,45 @@ function findNextStopIndex(x) {
 
 function createOrUpdateBusMarker(bus) {
   let mk = state.markersByBus.get(bus.id);
+  const statusClass = (bus.status === 'dwelling_at_stop') ? 'dwelling' : (bus.status === 'holding' ? 'holding' : 'running');
+  const html = `
+    <div class="bus-marker">
+      <img src="bus.png" alt="bus"/>
+      <div class="bus-badge ${statusClass}">${bus.id}</div>
+    </div>`;
   if (!mk) {
-    const icon = new AMap.Icon({
-      image: 'bus.png',
-      size: new AMap.Size(70, 70),
-      imageSize: new AMap.Size(70, 70),
-    });
-    mk = new AMap.Marker({ icon, anchor: 'center', offset: new AMap.Pixel(0, -12), zIndex: 110 });
+    mk = new AMap.Marker({ content: html, anchor: 'center', offset: new AMap.Pixel(0, -16), zIndex: 110 });
     state.map.add(mk);
     state.markersByBus.set(bus.id, mk);
 
     // 悬停显示信息
     mk.on('mouseover', () => {
       const d = mk.getExtData() || {};
+      const speedStr = (typeof d.v_kmh_inst === 'number')
+        ? `速度：${Math.round(d.v_kmh_inst * 10) / 10} km/h`
+        : ((typeof d.v_kmh === 'number') ? `速度：${Math.round(d.v_kmh * 10) / 10} km/h` : '');
       const lines = [
         `Bus ${d.id ?? ''}`,
-        d.status ? `状态：${d.status === 'dwelling' ? '停靠' : '行驶'}` : '',
-        (typeof d.v_kmh === 'number') ? `速度：${Math.round(d.v_kmh * 10) / 10} km/h` : '',
-        (typeof d.x === 'number') ? `距离：${Math.round(d.x)} m` : ''
+        d.status ? `状态：${d.status === 'dwelling_at_stop' ? '停靠' : (d.status === 'holding' ? '等待(holding)' : '行驶')}` : '',
+        speedStr,
+        (typeof d.dist_m === 'number') ? `距离：${Math.round(d.dist_m)} m` : ((typeof d.x === 'number') ? `距离：${Math.round(d.x)} m` : '')
       ].filter(Boolean).join('<br/>');
       state.infoWindow && state.infoWindow.setContent(`<div style="min-width:140px;color:#111;line-height:1.4;font-size:14px">${lines}</div>`);
       state.infoWindow && state.infoWindow.open(state.map, mk.getPosition());
     });
     mk.on('mouseout', () => { state.infoWindow && state.infoWindow.close(); });
+  } else {
+    if (typeof mk.setContent === 'function') mk.setContent(html);
   }
   const totalLen = state.routeLength > 0 ? state.routeLength : (state.stopXs[state.stopXs.length - 1] || 0);
   const pos = projectDistanceToPolyline(state.routeLngLats, Math.min(bus.x, totalLen), totalLen);
   if (pos) mk.setPosition(pos);
   // 标签与扩展数据
-  const vKmh = (bus.status === 'running') ? (state.speedMps * 3.6) : 0;
-  mk.setExtData({ id: bus.id, status: bus.status, v_kmh: vKmh, x: bus.x });
+  const vKmh = (typeof bus.v_kmh === 'number') ? bus.v_kmh : ((bus.status === 'running_on_link') ? (state.speedMps * 3.6) : 0);
+  const totalForDisplay = state.routeLength > 0 ? state.routeLength : (state.stopXs[state.stopXs.length - 1] || 0);
+  const distFromStart = (!state.reverseDirection) ? bus.x : Math.max(0, totalForDisplay - bus.x);
+  mk.setExtData({ id: bus.id, status: bus.status, v_kmh: vKmh, v_kmh_log: bus.v_kmh_log, v_kmh_inst: bus.v_kmh_inst, x: bus.x, dist_m: distFromStart });
   mk.setTitle(`Bus ${bus.id}`);
-  if (typeof mk.setLabel === 'function') {
-    mk.setLabel({ content: String(bus.id), direction: 'top' });
-  }
 }
 
 function stopUniformSim() {
@@ -285,6 +349,243 @@ function prepareUniformPhases() {
     state.phases.push({ type: 'dwell', t0: d0, t1: d1, x0: x1, x1 });
     state.cycleDurationSec = d1;
   }
+}
+
+// ========= 基于日志的时间线驱动（使用日志时刻，不使用日志坐标/速度） =========
+function prepareTimelineFromJson(timelineJson) {
+  const m = timelineJson || {};
+  const segsRaw = m.segments_by_bus || {};
+  const byBus = {};
+  const toNum = (v) => {
+    const n = (typeof v === 'string') ? parseFloat(v) : v;
+    return Number.isFinite(n) ? n : undefined;
+  };
+  for (const k of Object.keys(segsRaw)) {
+    const busId = String(k);
+    const arr = Array.isArray(segsRaw[k]) ? segsRaw[k] : [];
+    byBus[busId] = arr.map(s => {
+      if (s.type === 'dwell') {
+        // 数值统一转 number；坐标仍用前端站点
+        return { type: 'dwell', stop: toNum(s.stop), t0: toNum(s.t0), t1: toNum(s.t1), x: toNum(s.x) };
+      } else if (s.type === 'run') {
+        // 保留 x0/x1（距离），但最终投影到前端 polyline；不使用日志中的站点坐标
+        return { type: 'run', from: toNum(s.from), to: toNum(s.to), t0: toNum(s.t0), t1: toNum(s.t1), x0: toNum(s.x0), x1: toNum(s.x1), v_kmh_log: toNum(s.v_kmh), v_kmh_inst: toNum(s.v_kmh_inst) };
+      } else {
+        return null;
+      }
+    }).filter(Boolean).sort((a, b) => a.t0 - b.t0);
+  }
+  state.tMin = toNum(m.t_min) ?? 0;
+  state.tMax = toNum(m.t_max) ?? 0;
+  state.totalSpanSec = Math.max(0, state.tMax - state.tMin);
+  // 严格模式：完全使用时间线原段，既有 run 才移动，dwell 必停靠；不做任何合成或裁剪
+  if (state.strictStatus) {
+    state.segmentsByBus = byBus;
+    return;
+  }
+  // 插入“起点→首段起点”的合成段，确保 time=tMin 时刻车辆显示在起点
+  for (const busId of Object.keys(byBus)) {
+    const segs = byBus[busId];
+    if (!segs || segs.length === 0) continue;
+    const first = segs[0];
+    const startStop = (first.type === 'run') ? (first.from ?? 0) : (first.stop ?? 0);
+    const t0 = state.tMin;
+    const t1 = Math.max(state.tMin, first.t0 || state.tMin);
+    if (t1 > t0) {
+      segs.unshift({ type: 'run', from: 0, to: startStop, t0, t1 });
+    } else {
+      segs.unshift({ type: 'dwell', stop: 0, t0, t1 });
+    }
+
+    // 修复 run 段端点：若缺少 from/to 或 x0/x1，则用相邻 dwell 的 stop 推断
+    // 第一遍：自前向后，用最近一次 dwell.stop 作为缺失的 from
+    let lastStop = 0;
+    for (let i = 0; i < segs.length; i++) {
+      const s = segs[i];
+      if (s.type === 'dwell' && s.stop != null) {
+        lastStop = s.stop;
+      } else if (s.type === 'run') {
+        if (!(Number.isFinite(s.from))) s.from = lastStop;
+      }
+    }
+    // 第二遍：自后向前，用下一次 dwell.stop 作为缺失的 to
+    let nextStop = 0;
+    for (let i = segs.length - 1; i >= 0; i--) {
+      const s = segs[i];
+      if (s.type === 'dwell' && s.stop != null) {
+        nextStop = s.stop;
+      } else if (s.type === 'run') {
+        if (!(Number.isFinite(s.to))) s.to = nextStop;
+        // 若 t0==t1，扩大为 [t0, t0+1e-3]，避免零时长导致 r 跳变
+        if (s.t1 <= s.t0) s.t1 = (s.t0 ?? 0) + 1e-3;
+      }
+    }
+
+    // 第三步：若任意两个相邻 dwell 之间不存在有效 run，则插入合成 run；
+    // 若两段 dwell 紧贴（t1 == 下一段 t0），从前一 dwell 尾部“借用”一小段 epsilon 作为 run，保持到站时刻不变
+    const filled = [];
+    const EPS = 0.5; // 秒，最小可视化行驶时间
+    for (let i = 0; i < segs.length; i++) {
+      const cur = segs[i];
+      const next = segs[i + 1];
+      if (!next) { filled.push(cur); continue; }
+      if (cur.type === 'dwell' && next.type === 'dwell') {
+        const fromStop = (cur.stop != null) ? cur.stop : 0;
+        const toStop = (next.stop != null) ? next.stop : fromStop;
+        const curLen = Math.max(0, (cur.t1 || 0) - (cur.t0 || 0));
+        let t0r = (typeof cur.t1 === 'number') ? cur.t1 : 0;
+        const t1r = (typeof next.t0 === 'number') ? next.t0 : t0r + 1e-3;
+        // 若没有间隔（或极小），从 cur 尾部借用 epsilon，使 run 至少 EPS 秒
+        if (!(t1r > t0r + 1e-6)) {
+          const borrow = Math.min(EPS, Math.max(1e-3, curLen / 2));
+          // 推入缩短后的 cur
+          const curAdj = { ...cur, t1: (cur.t1 || 0) - borrow };
+          filled.push(curAdj);
+          t0r = curAdj.t1;
+          if (toStop !== fromStop) filled.push({ type: 'run', from: fromStop, to: toStop, t0: t0r, t1: t1r });
+          continue;
+        }
+        // 正常有间隔
+        filled.push(cur);
+        if (toStop !== fromStop) filled.push({ type: 'run', from: fromStop, to: toStop, t0: t0r, t1: t1r });
+      } else {
+        filled.push(cur);
+      }
+    }
+    // 第四步：裁剪 run 段时间到相邻 dwell 之间，避免与 dwell 重叠导致不停靠
+    const trimmed = [];
+    for (let i = 0; i < filled.length; i++) {
+      const s = filled[i];
+      if (s.type !== 'run') { trimmed.push(s); continue; }
+      // 前一个/后一个 dwell
+      let prevDwell = null, nextDwell = null;
+      for (let j = i - 1; j >= 0; j--) { if (filled[j].type === 'dwell') { prevDwell = filled[j]; break; } }
+      for (let j = i + 1; j < filled.length; j++) { if (filled[j].type === 'dwell') { nextDwell = filled[j]; break; } }
+      const origT0 = (typeof s.t0 === 'number') ? s.t0 : 0;
+      const origT1 = (typeof s.t1 === 'number') ? s.t1 : (origT0 + 1e-3);
+      const newT0 = Math.max(origT0, prevDwell ? (prevDwell.t1 || origT0) : origT0);
+      const newT1 = Math.min(origT1, nextDwell ? (nextDwell.t0 || origT1) : origT1);
+      if (newT1 > newT0 + 5e-4) {
+        trimmed.push({ ...s, t0: newT0, t1: newT1 });
+      } else {
+        // 去掉零长度 run，确保停靠
+      }
+    }
+    byBus[busId] = trimmed;
+  }
+  state.segmentsByBus = byBus;
+}
+
+function findSegmentForTime(segments, t) {
+  // 若命中某个 dwell 的时间窗，优先返回 dwell，确保停靠；
+  for (let i = 0; i < segments.length; i++) {
+    const s = segments[i];
+    if (s.type === 'dwell') {
+      const t0 = (typeof s.t0 === 'number') ? s.t0 : 0;
+      const t1 = (typeof s.t1 === 'number') ? s.t1 : t0 + 1e-6;
+      if (t >= t0 && t < t1) return s;
+    }
+  }
+  // 其次选择 run 段（保证区间内平滑）
+  for (let i = 0; i < segments.length; i++) {
+    const s = segments[i];
+    const t0 = (typeof s.t0 === 'number') ? s.t0 : 0;
+    const t1 = (typeof s.t1 === 'number') ? s.t1 : t0 + 1e-6;
+    if (t >= t0 && t < t1) return s;
+  }
+  // 不匹配任何段时，返回 null（不要用“最后一段”兜底，防止一开始就把车画在终点）
+  return null;
+}
+
+function getDisplayPositionForSegment(seg, tNow) {
+  if (!seg) return null;
+  if (!state.stopXs || state.stopXs.length === 0) return null;
+  if (seg.type === 'dwell') {
+    let x;
+    if (seg.stop != null && state.stopXs && state.stopXs.length) {
+      const idx = mapStopIndex(seg.stop);
+      x = state.stopXs[idx] || 0;
+    } else if (typeof seg.x === 'number') {
+      x = mapDistanceX(seg.x);
+    } else {
+      x = state.stopXs[0] || 0;
+    }
+    const status = (seg.status === 'holding') ? 'holding' : 'dwelling_at_stop';
+    return { x, v_kmh: 0, status };
+  } else if (seg.type === 'run') {
+    let x0, x1;
+    // 优先使用 from/to 映射到当前站点
+    if (Number.isFinite(seg.from) && Number.isFinite(seg.to) && state.stopXs && state.stopXs.length) {
+      const fromIdx = mapStopIndex(seg.from);
+      const toIdx = mapStopIndex(seg.to);
+      x0 = state.stopXs[fromIdx] || 0;
+      x1 = state.stopXs[toIdx] || 0;
+    }
+    // 若缺失，则退化为使用日志的距离 x0/x1（仍投影到前端 polyline，不用日志坐标）
+    if (!(typeof x0 === 'number' && typeof x1 === 'number')) {
+      if (typeof seg.x0 === 'number' && typeof seg.x1 === 'number') {
+        x0 = mapDistanceX(seg.x0);
+        x1 = mapDistanceX(seg.x1);
+      } else {
+        // 仍然缺失时，保持当前位置（避免跳动）。
+        // 尝试从邻近 dwell 段推断一个短 run，避免纯跳变
+        const near = 1; // 由调用方按当前 tNow 查到的 seg 已经是运行段；此处兜底给极小位移
+        x0 = state.stopXs[0] || 0;
+        x1 = x0 + 1e-3;
+      }
+    }
+    // 如果 from/to 得到的距离没有位移而 x0/x1 有效，则优先使用 x0/x1
+    if ((typeof seg.x0 === 'number' && typeof seg.x1 === 'number')) {
+      const altX0 = mapDistanceX(seg.x0);
+      const altX1 = mapDistanceX(seg.x1);
+      if (Math.abs((x1 - x0)) < 1e-6 && Math.abs(altX1 - altX0) > 1e-6) {
+        x0 = altX0;
+        x1 = altX1;
+      }
+    }
+    const t0 = seg.t0, t1 = seg.t1;
+    const dt = Math.max(1e-6, (t1 - t0));
+    const r = Math.max(0, Math.min(1, (tNow - t0) / dt));
+    const x = x0 + (x1 - x0) * r;
+    const v_kmh = ((x1 - x0) / dt) * 3.6; // 按两站间平均速度
+    const v_kmh_log = (typeof seg.v_kmh_log === 'number') ? seg.v_kmh_log : undefined;
+    const v_kmh_inst = (typeof seg.v_kmh_inst === 'number') ? seg.v_kmh_inst : undefined;
+    return { x, v_kmh, v_kmh_log, v_kmh_inst, status: 'running_on_link' };
+  }
+  return null;
+}
+
+function renderTimelineFrame() {
+  const tNow = state.timeSec;
+  const presentIds = new Set();
+  for (const busId of Object.keys(state.segmentsByBus)) {
+    const segs = state.segmentsByBus[busId];
+    if (!segs || segs.length === 0) continue;
+    if (tNow < state.tMin || tNow > state.tMax) continue;
+    const seg = findSegmentForTime(segs, tNow);
+    const pos = getDisplayPositionForSegment(seg, tNow);
+    if (!pos) continue;
+    const bus = { id: Number.isFinite(parseInt(busId, 10)) ? parseInt(busId, 10) : busId, x: pos.x, status: pos.status, v_kmh: pos.v_kmh, v_kmh_log: pos.v_kmh_log, v_kmh_inst: pos.v_kmh_inst };
+    createOrUpdateBusMarker(bus);
+    presentIds.add(String(busId));
+  }
+  // 清理不在当前时刻出现的车辆
+  for (const [id, marker] of state.markersByBus.entries()) {
+    if (!presentIds.has(String(id))) { state.map.remove(marker); state.markersByBus.delete(id); }
+  }
+  const rel = Math.max(0, Math.min(state.totalSpanSec || 1, tNow - state.tMin));
+  if ($('clock')) $('clock').innerText = `${formatClock(rel, 0)} / ${formatClock(state.totalSpanSec || 1, 0)}`;
+  if ($('seekRange')) $('seekRange').value = String(Math.floor(((rel) / Math.max(1, state.totalSpanSec)) * 100));
+}
+
+function startTimelinePlayback() {
+  stopUniformSim();
+  if (!state.segmentsByBus || Object.keys(state.segmentsByBus).length === 0) return;
+  // 若 tMin 不命中任何段，则用全局最早段起点，避免一开始把车画在末段
+  let initial = state.tMin || 0;
+  // 统一从全局最早时刻开始播放，但初始位置强制显示在起点
+  state.timeSec = state.tMin || initial;
+  // 不立即渲染，等待用户点击“播放”后再渲染车辆
 }
 
 function interpolateRun(x0, x1, t0, t1, t) {
@@ -378,13 +679,18 @@ function startUniformSim() {
 
 function play() {
   if (state.isPlaying) return;
-  if (!state.phases || state.phases.length === 0) return;
+  if (!(state.totalSpanSec > 0) && (!state.phases || state.phases.length === 0)) return;
   const fps = 30;
   const interval = Math.max(16, Math.floor(1000 / fps));
   state.isPlaying = true;
   state.timer = setInterval(() => {
-    state.timeSec += interval / 1000;
-    renderUniformFrame();
+    state.timeSec += (interval / 1000) * Math.max(0.25, Math.min(10, state.speedMul || 1));
+    if (state.totalSpanSec && state.totalSpanSec > 0) {
+      if (state.timeSec > state.tMax) state.timeSec = state.tMin || 0;
+      renderTimelineFrame();
+    } else {
+      renderUniformFrame();
+    }
   }, interval);
 }
 
@@ -414,7 +720,7 @@ function formatClock(sec, decimals) {
 function buildRouteCumLen(path) {
   const acc = [0];
   for (let i = 1; i < path.length; i++) {
-    acc[i] = acc[i - 1] + AMap.GeometryUtil.distance(path[i - 1], path[i]);
+    acc[i] = acc[i - 1] + distanceMeters(path[i - 1], path[i]);
   }
   return acc; // 与 path 等长，最后一个为总长
 }
@@ -425,21 +731,27 @@ function computeStopXsFromRoute(path, stopLngLats) {
     let minIdx = 0;
     let minD = Number.POSITIVE_INFINITY;
     for (let i = 0; i < path.length; i++) {
-      const d = AMap.GeometryUtil.distance(path[i], p);
+      const d = distanceMeters(path[i], p);
       if (d < minD) { minD = d; minIdx = i; }
     }
     return cum[minIdx];
   });
 }
 function updateStatsPanel() {
-  if (!state.stats) return;
-  $('statBus').innerText = String(state.stats.bus_count);
-  $('statSpeed').innerText = String(state.stats.avg_speed_kmh);
-  $('statPax').innerText = String(state.stats.total_pax);
-  $('statDuration').innerText = String(state.stats.duration_min);
+  const s = state.stats || {};
+  const setText = (id, v) => {
+    const el = $(id);
+    if (el) el.innerText = String(v != null ? v : '-');
+  };
+  setText('statBus', s.bus_count);
+  setText('statSpeed', s.avg_speed_kmh);
+  setText('statPax', s.total_pax);
+  setText('statDuration', s.duration_min);
 }
 
 async function bootstrap() {
+  const $loading = document.getElementById('loading');
+  if ($loading) $loading.setAttribute('aria-hidden', 'false');
   initMap();
   // 加载数据
   const [stationsJson, statsJson, timelineJson] = await Promise.all([
@@ -452,6 +764,8 @@ async function bootstrap() {
   // 从日志时间线提取 busId 列表
   if (timelineJson && timelineJson.segments_by_bus) {
     state.busIds = Object.keys(timelineJson.segments_by_bus);
+    // 准备基于日志的时间线：总仿真时间与到站时间按日志
+    prepareTimelineFromJson(timelineJson);
   } else {
     state.busIds = [];
   }
@@ -470,26 +784,47 @@ async function bootstrap() {
 
   // 绘制站点（真实/投影）并准备路线几何
   drawStationsOnRoute();
-  // 准备一致速度仿真：默认暂停，等待用户点击播放
-  startUniformSim();
+  // 若有日志：仅完成时间线准备与初始时间设置，不立即渲染车辆（保持隐藏）
+  // 无日志则回退统一速度仿真，保持原行为
+  if (timelineJson && timelineJson.segments_by_bus) {
+    state.timeSec = state.tMin || 0; // 延后到用户点击“播放”时再渲染
+  } else {
+    startUniformSim();
+  }
+  if ($loading) $loading.setAttribute('aria-hidden', 'true');
 
   // 控件事件
   const btnPlay = $('btnPlay');
   const btnPause = $('btnPause');
   const seek = $('seekRange');
+  const speedRange = $('speedRange');
+  const speedText = $('speedText');
   if (btnPlay) btnPlay.onclick = () => play();
   if (btnPause) btnPause.onclick = () => pause();
   if (seek) {
     let wasPlaying = false;
     seek.addEventListener('input', (e) => {
-      if (!state.phases || state.phases.length === 0) return;
-      const T = state.cycleDurationSec > 0 ? state.cycleDurationSec : 1;
-      const pct = parseInt(e.target.value, 10) / 100;
-      const tNorm = Math.max(0, Math.min(1, pct)) * T;
-      // 将全局时间对齐到当前所在周期
-      const k = Math.floor(state.timeSec / T);
-      state.timeSec = k * T + tNorm;
-      renderUniformFrame();
+    const pct = parseInt(e.target.value, 10) / 100;
+      if (state.totalSpanSec && state.totalSpanSec > 0) {
+        // 日志模式：绝对时间范围 [tMin, tMax]
+        const rel = Math.max(0, Math.min(1, pct)) * state.totalSpanSec;
+        state.timeSec = (state.tMin || 0) + rel;
+        renderTimelineFrame();
+      } else if (state.phases && state.phases.length > 0) {
+        // 统一速度模式：按单周期
+        const T = state.cycleDurationSec > 0 ? state.cycleDurationSec : 1;
+        const tNorm = Math.max(0, Math.min(1, pct)) * T;
+        const k = Math.floor(state.timeSec / T);
+        state.timeSec = k * T + tNorm;
+        renderUniformFrame();
+      }
+    });
+  }
+  if (speedRange) {
+    speedRange.addEventListener('input', (e) => {
+      const v = parseFloat(e.target.value);
+      state.speedMul = Math.max(0.25, Math.min(10, isNaN(v) ? 1 : v));
+      if (speedText) speedText.innerText = `${state.speedMul}x`;
     });
   }
 }

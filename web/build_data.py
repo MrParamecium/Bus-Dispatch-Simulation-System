@@ -125,6 +125,10 @@ def build_timeline(xcum: Dict[int, float]):
             spot_type = m.group('spot_type')
             spot_id = int(m.group('spot_id'))
             status = m.group('status')
+            try:
+                inst_speed = float(m.group('speed'))  # m/s 瞬时速度
+            except Exception:
+                inst_speed = None
             pax_num = int(m.group('pax_num'))
 
             if t_min is None or t < t_min:
@@ -133,10 +137,10 @@ def build_timeline(xcum: Dict[int, float]):
                 t_max = t
 
             st = state.setdefault(bus_id, {'last_type': None, 'last_stop': None, 'run_from': None, 't_run': None, 't_dwell': None,
-                                           'acc_type': None, 'acc_sum': 0, 'acc_cnt': 0, 'pax0': None, 'pax1': None})
+                                           'acc_type': None, 'acc_sum': 0, 'acc_cnt': 0, 'pax0': None, 'pax1': None, 'v_inst_mps': None})
             segs = segments_by_bus.setdefault(bus_id, [])
 
-            if spot_type == 'stop':
+            if spot_type == 'stop' or spot_type == 'holder':
                 if st['last_type'] != 'stop' or st['last_stop'] != spot_id:
                     if st['t_run'] is not None and st['run_from'] is not None and st['last_type'] == 'link':
                         from_stop = st['run_from']
@@ -147,8 +151,10 @@ def build_timeline(xcum: Dict[int, float]):
                             dt = max(1, t - st['t_run'])
                             v_mps = (x1 - x0) / dt
                             pax_avg = (st['acc_sum'] / st['acc_cnt']) if st['acc_cnt'] > 0 else pax_num
+                            v_inst = st.get('v_inst_mps') if st.get('v_inst_mps') is not None else None
                             segs.append({'type': 'run', 'from': from_stop, 'to': to_stop, 't0': st['t_run'], 't1': t,
                                          'x0': x0, 'x1': x1, 'v_mps': v_mps, 'v_kmh': v_mps * 3.6,
+                                         'v_mps_inst': v_inst, 'v_kmh_inst': (v_inst * 3.6) if (isinstance(v_inst, (int, float))) else None,
                                          'pax_avg': pax_avg, 'pax0': st['pax0'], 'pax1': st['pax1']})
                     # 切换到停靠段，重置累积器
                     st['acc_type'] = 'dwell'
@@ -158,6 +164,8 @@ def build_timeline(xcum: Dict[int, float]):
                     st['pax1'] = pax_num
                     st['t_dwell'] = t
                     st['last_stop'] = spot_id
+                    st['dwell_status'] = 'holding' if spot_type == 'holder' or status == 'holding' else 'dwelling'
+                    st['v_inst_mps'] = None
                 else:
                     # dwell 段累积 pax
                     if st['acc_type'] != 'dwell':
@@ -165,6 +173,20 @@ def build_timeline(xcum: Dict[int, float]):
                         st['acc_sum'] = 0
                         st['acc_cnt'] = 0
                         st['pax0'] = pax_num if st['pax0'] is None else st['pax0']
+                    # 若停靠过程中状态从 normal 切到 holding（或反之），则切分前一段
+                    current_dwell_status = 'holding' if spot_type == 'holder' or status == 'holding' else 'dwelling'
+                    if st.get('dwell_status') and st['dwell_status'] != current_dwell_status and st.get('t_dwell') is not None and st.get('last_stop') is not None:
+                        s = st['last_stop']
+                        if s in xcum and t > st['t_dwell']:
+                            pax_avg = (st['acc_sum'] / st['acc_cnt']) if st['acc_cnt'] > 0 else pax_num
+                            segs.append({'type': 'dwell', 'stop': s, 't0': st['t_dwell'], 't1': t, 'x': float(xcum[s]), 'status': st['dwell_status'],
+                                         'pax_avg': pax_avg, 'pax0': st['pax0'], 'pax1': st['pax1']})
+                        st['t_dwell'] = t
+                        st['acc_sum'] = 0
+                        st['acc_cnt'] = 0
+                        st['pax0'] = pax_num
+                        st['pax1'] = pax_num
+                        st['dwell_status'] = current_dwell_status
                     st['acc_sum'] += pax_num
                     st['acc_cnt'] += 1
                     st['pax1'] = pax_num
@@ -176,14 +198,23 @@ def build_timeline(xcum: Dict[int, float]):
                         s = st['last_stop']
                         if s in xcum:
                             pax_avg = (st['acc_sum'] / st['acc_cnt']) if st['acc_cnt'] > 0 else pax_num
-                            segs.append({'type': 'dwell', 'stop': s, 't0': st['t_dwell'], 't1': t, 'x': float(xcum[s]),
+                            segs.append({'type': 'dwell', 'stop': s, 't0': st['t_dwell'], 't1': t, 'x': float(xcum[s]), 'status': st.get('dwell_status') or 'dwelling',
                                          'pax_avg': pax_avg, 'pax0': st['pax0'], 'pax1': st['pax1']})
                     st['t_dwell'] = None
                     st['run_from'] = st['last_stop'] if st['last_stop'] is not None else spot_id
                     st['t_run'] = t
+                    # 记录本次区间起始时刻的瞬时速度（m/s）
+                    if inst_speed is not None and inst_speed >= 0:
+                        st['v_inst_mps'] = inst_speed
+                    else:
+                        st['v_inst_mps'] = None
                 if st['t_run'] is None:
                     st['run_from'] = spot_id
                     st['t_run'] = t
+                    if inst_speed is not None and inst_speed >= 0:
+                        st['v_inst_mps'] = inst_speed
+                    else:
+                        st['v_inst_mps'] = None
                 st['last_type'] = 'link'
                 # run 段累积 pax
                 if st['acc_type'] != 'run':
