@@ -98,6 +98,51 @@ def read_pax_lines():
     with open(PAX_LOG, 'r', encoding='utf-8') as f:
         return sum(1 for _ in f)
 
+# pax 行解析：INFO:root:pax_id:3,origin:1,destination:2,arrival_time:91,board_time504,alight_time:778,out_vehicle:413,in_vehicle:274
+PAX_RE = re.compile(
+    r"pax_id:(?P<pid>\d+),origin:(?P<o>\d+),destination:(?P<d>\d+),arrival_time:(?P<arr>\d+),board_time[: ]?(?P<board>\d+),alight_time:(?P<alight>\d+)"
+)
+
+def build_pax_index():
+    """构建一个按站点聚合的乘客索引，用于前端显示。
+    返回：
+      pax_index = {
+        'by_stop': {stop_id: {'arrivals': [times], 'boards': [times], 'alights': [times]}},
+        'by_time': 可选
+      }
+    以及一个用于 dwell 段注入的字典：dwell_key=(bus_id, stop, t0, t1) -> {on, off, onboard}
+    onboard 通过累积上车-下车近似估计。
+    """
+    if not os.path.exists(PAX_LOG):
+        return {'by_stop': {}}, {}
+    by_stop = {}
+    pax_records = []
+    with open(PAX_LOG, 'r', encoding='utf-8') as f:
+        for line in f:
+            if 'INFO:root:' not in line:
+                continue
+            payload = line.split('INFO:root:')[1]
+            m = PAX_RE.search(payload)
+            if not m:
+                continue
+            o = int(m.group('o'))
+            d = int(m.group('d'))
+            arr = int(m.group('arr'))
+            brd = int(m.group('board'))
+            alt = int(m.group('alight'))
+            by_stop.setdefault(o, {'arrivals': [], 'boards': [], 'alights': []})
+            by_stop.setdefault(d, {'arrivals': [], 'boards': [], 'alights': []})
+            by_stop[o]['arrivals'].append(arr)
+            by_stop[o]['boards'].append(brd)
+            by_stop[d]['alights'].append(alt)
+            pax_records.append((o, d, arr, brd, alt))
+    # 为 dwell 注入 on/off。我们不在日志里直接知道 bus_id 对应的乘客上下车，
+    # 但可以基于时间窗统计：某站点 [t0,t1) 内 board/alight 的数量。
+    dwell_aggregate = {}
+    # 为了能匹配 bus 的 dwell 段，需要先构建一次 segments（轻读取）
+    # 简化：在 build_timeline 之后再做注入。
+    return {'by_stop': by_stop}, dwell_aggregate
+
 
 LOG_RE = re.compile(
     r"t:(?P<t>\d+),bus_id:(?P<bus_id>\d+),spot_type:(?P<spot_type>\w+),spot_id:(?P<spot_id>-?\d+),dis:(?P<dis>[-+]?\d*\.?\d+),status:(?P<status>[^,]+),speed:(?P<speed>[-+]?\d*\.?\d+),pax_num:(?P<pax_num>\d+)"
@@ -258,6 +303,7 @@ def main():
 
     bus_count, avg_kmh, duration_min = read_bus_stats()
     pax_total = read_pax_lines()
+    pax_index, dwell_aggregate = build_pax_index()
     stats = {
         'bus_count': bus_count,
         'avg_speed_kmh': avg_kmh,
@@ -276,9 +322,14 @@ def main():
     with open(os.path.join(OUT_DIR, 'timeline.json'), 'w', encoding='utf-8') as f:
         json.dump(timeline, f, ensure_ascii=False)
 
+    # 乘客索引单独输出
+    with open(os.path.join(OUT_DIR, 'pax_index.json'), 'w', encoding='utf-8') as f:
+        json.dump(pax_index, f, ensure_ascii=False)
+
     print('[OK] Wrote:', os.path.join(OUT_DIR, 'stations.json'))
     print('[OK] Wrote:', os.path.join(OUT_DIR, 'stats.json'))
     print('[OK] Wrote:', os.path.join(OUT_DIR, 'timeline.json'))
+    print('[OK] Wrote:', os.path.join(OUT_DIR, 'pax_index.json'))
 
 
 if __name__ == '__main__':

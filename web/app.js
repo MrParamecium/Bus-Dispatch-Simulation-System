@@ -38,6 +38,7 @@ const state = {
   isPlaying: false,
   infoWindow: null,
   busIds: [],
+  paxIndex: { by_stop: {} },
   // 日志时间线驱动
     tMin: 0,
     tMax: 0,
@@ -171,6 +172,26 @@ function drawStationsOnRoute() {
   }
 
   if (state.stationMarkers.length) state.map.add(state.stationMarkers);
+  // 为站点 marker 添加悬停，显示实时等待人数（按当前全局时间）
+  const byStop = (state.paxIndex && state.paxIndex.by_stop) ? state.paxIndex.by_stop : {};
+  state.stationMarkers.forEach((marker, idx) => {
+    const stopIdx = mapStopIndex(idx);
+    marker.on('mouseover', () => {
+      const s = byStop[String(stopIdx)] || byStop[stopIdx] || { arrivals: [], boards: [], alights: [] };
+      const tNow = state.timeSec || 0;
+      const arrs = Array.isArray(s.arrivals) ? s.arrivals : [];
+      const brds = Array.isArray(s.boards) ? s.boards : [];
+      const arrivedCnt = arrs.filter(t => t <= tNow).length;
+      const boardedCnt = brds.filter(t => t <= tNow).length;
+      const waiting = Math.max(0, arrivedCnt - boardedCnt);
+      const html = `<div style="min-width:160px;color:#111;line-height:1.4;font-size:14px">
+        站点 ${stopIdx}<br/>站内等待人数：${waiting} 人
+      </div>`;
+      state.infoWindow && state.infoWindow.setContent(html);
+      state.infoWindow && state.infoWindow.open(state.map, marker.getPosition());
+    });
+    marker.on('mouseout', () => { state.infoWindow && state.infoWindow.close(); });
+  });
 }
 function mapStopIndex(idx) {
   const n = state.stopXs ? state.stopXs.length : 0;
@@ -298,11 +319,18 @@ function createOrUpdateBusMarker(bus) {
       const speedStr = (typeof d.v_kmh_inst === 'number')
         ? `速度：${Math.round(d.v_kmh_inst * 10) / 10} km/h`
         : ((typeof d.v_kmh === 'number') ? `速度：${Math.round(d.v_kmh * 10) / 10} km/h` : '');
+      const paxLines = [];
+      if (typeof d.pax_onboard === 'number') paxLines.push(`车内：${d.pax_onboard} 人`);
+      if (d.status === 'dwelling_at_stop') {
+        if (typeof d.pax_on === 'number') paxLines.push(`上车：${d.pax_on} 人`);
+        if (typeof d.pax_off === 'number') paxLines.push(`下车：${d.pax_off} 人`);
+      }
       const lines = [
         `Bus ${d.id ?? ''}`,
         d.status ? `状态：${d.status === 'dwelling_at_stop' ? '停靠' : (d.status === 'holding' ? '等待(holding)' : '行驶')}` : '',
         speedStr,
-        (typeof d.dist_m === 'number') ? `距离：${Math.round(d.dist_m)} m` : ((typeof d.x === 'number') ? `距离：${Math.round(d.x)} m` : '')
+        (typeof d.dist_m === 'number') ? `距离：${Math.round(d.dist_m)} m` : ((typeof d.x === 'number') ? `距离：${Math.round(d.x)} m` : ''),
+        ...paxLines
       ].filter(Boolean).join('<br/>');
       state.infoWindow && state.infoWindow.setContent(`<div style="min-width:140px;color:#111;line-height:1.4;font-size:14px">${lines}</div>`);
       state.infoWindow && state.infoWindow.open(state.map, mk.getPosition());
@@ -318,7 +346,7 @@ function createOrUpdateBusMarker(bus) {
   const vKmh = (typeof bus.v_kmh === 'number') ? bus.v_kmh : ((bus.status === 'running_on_link') ? (state.speedMps * 3.6) : 0);
   const totalForDisplay = state.routeLength > 0 ? state.routeLength : (state.stopXs[state.stopXs.length - 1] || 0);
   const distFromStart = (!state.reverseDirection) ? bus.x : Math.max(0, totalForDisplay - bus.x);
-  mk.setExtData({ id: bus.id, status: bus.status, v_kmh: vKmh, v_kmh_log: bus.v_kmh_log, v_kmh_inst: bus.v_kmh_inst, x: bus.x, dist_m: distFromStart });
+  mk.setExtData({ id: bus.id, status: bus.status, v_kmh: vKmh, v_kmh_log: bus.v_kmh_log, v_kmh_inst: bus.v_kmh_inst, x: bus.x, dist_m: distFromStart, pax_onboard: bus.pax_onboard, pax_on: bus.pax_on, pax_off: bus.pax_off });
   mk.setTitle(`Bus ${bus.id}`);
 }
 
@@ -366,10 +394,12 @@ function prepareTimelineFromJson(timelineJson) {
     byBus[busId] = arr.map(s => {
       if (s.type === 'dwell') {
         // 数值统一转 number；坐标仍用前端站点
-        return { type: 'dwell', stop: toNum(s.stop), t0: toNum(s.t0), t1: toNum(s.t1), x: toNum(s.x) };
+        return { type: 'dwell', stop: toNum(s.stop), t0: toNum(s.t0), t1: toNum(s.t1), x: toNum(s.x),
+                 pax0: toNum(s.pax0), pax1: toNum(s.pax1), pax_avg: toNum(s.pax_avg) };
       } else if (s.type === 'run') {
         // 保留 x0/x1（距离），但最终投影到前端 polyline；不使用日志中的站点坐标
-        return { type: 'run', from: toNum(s.from), to: toNum(s.to), t0: toNum(s.t0), t1: toNum(s.t1), x0: toNum(s.x0), x1: toNum(s.x1), v_kmh_log: toNum(s.v_kmh), v_kmh_inst: toNum(s.v_kmh_inst) };
+        return { type: 'run', from: toNum(s.from), to: toNum(s.to), t0: toNum(s.t0), t1: toNum(s.t1), x0: toNum(s.x0), x1: toNum(s.x1), v_kmh_log: toNum(s.v_kmh), v_kmh_inst: toNum(s.v_kmh_inst),
+                 pax0: toNum(s.pax0), pax1: toNum(s.pax1), pax_avg: toNum(s.pax_avg) };
       } else {
         return null;
       }
@@ -511,7 +541,32 @@ function getDisplayPositionForSegment(seg, tNow) {
       x = state.stopXs[0] || 0;
     }
     const status = (seg.status === 'holding') ? 'holding' : 'dwelling_at_stop';
-    return { x, v_kmh: 0, status };
+    // 车内人数（用 pax0/pax1 线性插值，缺失则用 pax_avg）
+    let paxOnboard;
+    if (typeof seg.pax0 === 'number' && typeof seg.pax1 === 'number') {
+      const t0 = (typeof seg.t0 === 'number') ? seg.t0 : 0;
+      const t1 = (typeof seg.t1 === 'number') ? seg.t1 : t0 + 1e-6;
+      const r = Math.max(0, Math.min(1, (tNow - t0) / Math.max(1e-6, t1 - t0)));
+      paxOnboard = seg.pax0 + (seg.pax1 - seg.pax0) * r;
+    } else if (typeof seg.pax_avg === 'number') {
+      paxOnboard = seg.pax_avg;
+    }
+    if (typeof paxOnboard === 'number') paxOnboard = Math.max(0, Math.round(paxOnboard));
+    // 上下车人数（基于 pax_index，在 [t0, t1) 时间窗统计）
+    let paxOn = undefined, paxOff = undefined;
+    try {
+      const byStop = (state.paxIndex && state.paxIndex.by_stop) ? state.paxIndex.by_stop : {};
+      const rec = byStop[String(seg.stop)] || byStop[seg.stop];
+      if (rec) {
+        const t0 = (typeof seg.t0 === 'number') ? seg.t0 : 0;
+        const t1 = (typeof seg.t1 === 'number') ? seg.t1 : t0;
+        const boards = Array.isArray(rec.boards) ? rec.boards : [];
+        const alights = Array.isArray(rec.alights) ? rec.alights : [];
+        paxOn = boards.filter(t => t >= t0 && t < t1).length;
+        paxOff = alights.filter(t => t >= t0 && t < t1).length;
+      }
+    } catch(_) {}
+    return { x, v_kmh: 0, status, pax_onboard: paxOnboard, pax_on: paxOn, pax_off: paxOff };
   } else if (seg.type === 'run') {
     let x0, x1;
     // 优先使用 from/to 映射到当前站点
@@ -550,7 +605,15 @@ function getDisplayPositionForSegment(seg, tNow) {
     const v_kmh = ((x1 - x0) / dt) * 3.6; // 按两站间平均速度
     const v_kmh_log = (typeof seg.v_kmh_log === 'number') ? seg.v_kmh_log : undefined;
     const v_kmh_inst = (typeof seg.v_kmh_inst === 'number') ? seg.v_kmh_inst : undefined;
-    return { x, v_kmh, v_kmh_log, v_kmh_inst, status: 'running_on_link' };
+    // 车内人数（用 pax0/pax1 线性插值，缺失则 pax_avg）
+    let paxOnboard;
+    if (typeof seg.pax0 === 'number' && typeof seg.pax1 === 'number') {
+      paxOnboard = seg.pax0 + (seg.pax1 - seg.pax0) * Math.max(0, Math.min(1, (tNow - t0) / dt));
+    } else if (typeof seg.pax_avg === 'number') {
+      paxOnboard = seg.pax_avg;
+    }
+    if (typeof paxOnboard === 'number') paxOnboard = Math.max(0, Math.round(paxOnboard));
+    return { x, v_kmh, v_kmh_log, v_kmh_inst, pax_onboard: paxOnboard, status: 'running_on_link' };
   }
   return null;
 }
@@ -565,7 +628,7 @@ function renderTimelineFrame() {
     const seg = findSegmentForTime(segs, tNow);
     const pos = getDisplayPositionForSegment(seg, tNow);
     if (!pos) continue;
-    const bus = { id: Number.isFinite(parseInt(busId, 10)) ? parseInt(busId, 10) : busId, x: pos.x, status: pos.status, v_kmh: pos.v_kmh, v_kmh_log: pos.v_kmh_log, v_kmh_inst: pos.v_kmh_inst };
+    const bus = { id: Number.isFinite(parseInt(busId, 10)) ? parseInt(busId, 10) : busId, x: pos.x, status: pos.status, v_kmh: pos.v_kmh, v_kmh_log: pos.v_kmh_log, v_kmh_inst: pos.v_kmh_inst, pax_onboard: pos.pax_onboard, pax_on: pos.pax_on, pax_off: pos.pax_off };
     createOrUpdateBusMarker(bus);
     presentIds.add(String(busId));
   }
@@ -754,13 +817,15 @@ async function bootstrap() {
   if ($loading) $loading.setAttribute('aria-hidden', 'false');
   initMap();
   // 加载数据
-  const [stationsJson, statsJson, timelineJson] = await Promise.all([
+  const [stationsJson, statsJson, timelineJson, paxJson] = await Promise.all([
     loadJSON(`${DATA_BASE}/stations.json`),
     loadJSON(`${DATA_BASE}/stats.json`),
     loadJSON(`${DATA_BASE}/timeline.json`).catch(() => null),
+    loadJSON(`${DATA_BASE}/pax_index.json`).catch(() => ({ by_stop: {} })),
   ]);
   state.stations = stationsJson.stations || [];
   state.stats = statsJson || {};
+  state.paxIndex = paxJson || { by_stop: {} };
   // 从日志时间线提取 busId 列表
   if (timelineJson && timelineJson.segments_by_bus) {
     state.busIds = Object.keys(timelineJson.segments_by_bus);
