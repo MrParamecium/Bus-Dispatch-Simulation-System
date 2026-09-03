@@ -1,6 +1,9 @@
-# EXACT: EXperimental Adaptive Control Testbed for Transit (Slim)
+# Bus Dispatch Simulation System
 
-This is a slimmed version that keeps:
+> 公交车调度模拟系统
+
+A bus dispatch and operational control simulator for evaluating control strategies with passenger-level metrics. It is based on a slimmed, Beijing Route 57-focused version of EXACT and includes:
+
 - `Do_Nothing` baseline
 - `Naive_DDPG` (RL)
 - Beijing Route 57 dataset (`bj_route_57`)
@@ -10,14 +13,14 @@ This is a slimmed version that keeps:
 
 The following steps will guide you through the process of setting up the environment.
 
-**Bulid virtual enviroment**
+**Create a virtual environment**
 
 ```bash
  conda create -n my_env python==3.9
  conda activate my_env
 ```
 
-**Install Necessary Dependencies** use the following command：
+**Install dependencies**
 
 ```bash
  pip install -r requirements.txt
