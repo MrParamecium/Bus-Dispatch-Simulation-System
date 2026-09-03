@@ -56,7 +56,3 @@ Then open `http://localhost:8080/`.
 [3] Alesiani, F., Gkiotsalitis, K., 2018. Reinforcement learning-based bus holding for high-frequency services. In: 2018 21st International Conference on Intelligent Transportation Systems (ITSC). IEEE, pp. 3162–3168.
 
 [4] Wang, J., Sun, L., 2021. Reducing bus bunching with asynchronous multi-agent reinforcement learning. arXiv preprint arXiv:2105.00376.
-
-# For any questions, feel free to contact us via
-
-[1221201Z5005@smail.swufe.edu.cn](mailto:1221201Z5005@smail.swufe.edu.cn) or [shenminyu@swufe.edu.cn](mailto:shenminyu@swufe.edu.cn)
