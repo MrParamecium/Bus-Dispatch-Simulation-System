@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
   <title>Naive_DDPG 算法车辆运行模拟</title>
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=20251214">
   <!-- 高德地图 JS API -->
   <script>window._AMapSecurityConfig = { securityJsCode: 'f1429ace3a567dba843043d54270ed2d' };</script>
   <script src="https://webapi.amap.com/maps?v=2.0&key=a554d1e1748687479074aaaf9b5d5000"></script>
@@ -19,7 +19,7 @@
     </div>
     <header class="app-header">
       <div class="title">Naive_DDPG 算法车辆运行模拟</div>
-      <div class="episode">Episode 50</div>
+      <div class="episode" id="episodeText">Episode -</div>
       <div class="controls">
         <button id="btnToggle" class="btn primary">开始模拟</button>
         <button id="btnSidebar" class="btn">状态栏</button>
@@ -35,13 +35,37 @@
     </header>
 
     <main class="layout">
-      <aside class="side left-panel" id="leftPanel">
-        <div class="card">
+      <aside class="side left-panel" id="leftPanel" data-info="bus">
+        <div class="card stats-card" id="statsCard">
+          <div class="card-title">运行概览</div>
+          <div class="stats-grid" role="list">
+            <div class="stat" role="listitem">
+              <div class="stat-label">车辆数</div>
+              <div class="stat-value" id="statBus">-</div>
+            </div>
+            <div class="stat" role="listitem">
+              <div class="stat-label">平均速度</div>
+              <div class="stat-value"><span id="statSpeed">-</span><span class="unit"> km/h</span></div>
+            </div>
+            <div class="stat" role="listitem">
+              <div class="stat-label">乘客总数</div>
+              <div class="stat-value" id="statPax">-</div>
+            </div>
+            <div class="stat" role="listitem">
+              <div class="stat-label">仿真时长</div>
+              <div class="stat-value"><span id="statDuration">-</span><span class="unit"> min</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="panel-tabs" role="tablist" aria-label="信息切换">
+          <button id="tabBus" class="tab-btn" role="tab" aria-controls="busCard" aria-selected="true">车辆信息</button>
+          <button id="tabStop" class="tab-btn" role="tab" aria-controls="stopCard" aria-selected="false">站点信息</button>
+        </div>
+        <div class="card bus-card" id="busCard">
           <div class="card-title">车辆信息</div>
           <ul id="busList" class="bus-list"></ul>
         </div>
-        <div id="leftSplitter" class="splitter-vertical" aria-hidden="true"></div>
-        <div class="card">
+        <div class="card stop-card" id="stopCard">
           <div class="card-title">站点信息</div>
           <ul id="stopList" class="bus-list"></ul>
         </div>
@@ -53,8 +77,6 @@
     </main>
   </div>
 
-  <script src="app.js"></script>
+  <script src="app.js?v=20251214"></script>
 </body>
 </html>
-
-

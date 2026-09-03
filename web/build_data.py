@@ -3,7 +3,8 @@
 
 """
 数据构建（带时间线）：
-- 读取 episode50 的车辆日志，提取每辆车在各站的停靠区间与区间行驶时间
+- 读取 busoperation/outputs/log 下的车辆/乘客日志（默认自动选择最新 episode）
+- 提取每辆车在各站的停靠区间与区间行驶时间
 - 输出时间线（按车划分的分段 schedule），前端据此计算速度以严格对齐时间
 
 输出：
@@ -13,26 +14,26 @@
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 WORKSPACE = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-BUS_LOG = os.path.join(WORKSPACE, 'busoperation', 'outputs', 'log', 'bus_epsisode50.log')
-PAX_LOG = os.path.join(WORKSPACE, 'busoperation', 'outputs', 'log', 'pax_epsisode50.log')
-SPACING_CSV = os.path.join(WORKSPACE, 'busoperation', 'setup', 'beijing_57_data', 'spacing.csv')
-OUT_DIR = os.path.join(WORKSPACE, 'web', 'data')
+DEFAULT_LOG_DIR = os.path.join(WORKSPACE, 'busoperation', 'outputs', 'log')
+DEFAULT_SPACING_CSV = os.path.join(WORKSPACE, 'busoperation', 'setup', 'beijing_57_data', 'spacing.csv')
+DEFAULT_OUT_DIR = os.path.join(WORKSPACE, 'web', 'data')
 
 
-def ensure_out_dir():
-    os.makedirs(OUT_DIR, exist_ok=True)
+def ensure_out_dir(out_dir: str):
+    os.makedirs(out_dir, exist_ok=True)
 
 
-def read_spacing() -> Tuple[Dict[int, float], Dict[int, float], List[int]]:
+def read_spacing(spacing_csv: str) -> Tuple[Dict[int, float], Dict[int, float], List[int]]:
     spacing_by_stop: Dict[int, float] = {}
     ordered_stop_ids: List[int] = []
-    with open(SPACING_CSV, 'r', encoding='utf-8') as f:
+    with open(spacing_csv, 'r', encoding='utf-8') as f:
         _ = f.readline()
         for line in f:
             line = line.strip()
@@ -61,14 +62,14 @@ def read_spacing() -> Tuple[Dict[int, float], Dict[int, float], List[int]]:
 BUS_RE = re.compile(r"t:(?P<t>\d+),bus_id:(?P<bus_id>\d+),.*?status:(?P<status>[^,]+),speed:(?P<speed>[-+]?\d*\.?\d+)")
 
 
-def read_bus_stats():
+def read_bus_stats(bus_log_path: str):
     seen = set()
     sum_speed = 0.0
     cnt_speed = 0
     t_min, t_max = None, None
-    if not os.path.exists(BUS_LOG):
+    if not os.path.exists(bus_log_path):
         return 0, 0.0, 0.0
-    with open(BUS_LOG, 'r', encoding='utf-8') as f:
+    with open(bus_log_path, 'r', encoding='utf-8') as f:
         for line in f:
             if 'INFO:root:' not in line:
                 continue
@@ -92,10 +93,10 @@ def read_bus_stats():
     return len(seen), round(avg_kmh, 2), round(duration_min, 1)
 
 
-def read_pax_lines():
-    if not os.path.exists(PAX_LOG):
+def read_pax_lines(pax_log_path: str):
+    if not os.path.exists(pax_log_path):
         return 0
-    with open(PAX_LOG, 'r', encoding='utf-8') as f:
+    with open(pax_log_path, 'r', encoding='utf-8') as f:
         return sum(1 for _ in f)
 
 # pax 行解析：INFO:root:pax_id:3,origin:1,destination:2,arrival_time:91,board_time504,alight_time:778,out_vehicle:413,in_vehicle:274
@@ -103,7 +104,7 @@ PAX_RE = re.compile(
     r"pax_id:(?P<pid>\d+),origin:(?P<o>\d+),destination:(?P<d>\d+),arrival_time:(?P<arr>\d+),board_time[: ]?(?P<board>\d+),alight_time:(?P<alight>\d+)"
 )
 
-def build_pax_index():
+def build_pax_index(pax_log_path: str):
     """构建一个按站点聚合的乘客索引，用于前端显示。
     返回：
       pax_index = {
@@ -113,11 +114,11 @@ def build_pax_index():
     以及一个用于 dwell 段注入的字典：dwell_key=(bus_id, stop, t0, t1) -> {on, off, onboard}
     onboard 通过累积上车-下车近似估计。
     """
-    if not os.path.exists(PAX_LOG):
+    if not os.path.exists(pax_log_path):
         return {'by_stop': {}}, {}
     by_stop = {}
     pax_records = []
-    with open(PAX_LOG, 'r', encoding='utf-8') as f:
+    with open(pax_log_path, 'r', encoding='utf-8') as f:
         for line in f:
             if 'INFO:root:' not in line:
                 continue
@@ -149,15 +150,15 @@ LOG_RE = re.compile(
 )
 
 
-def build_timeline(xcum: Dict[int, float]):
+def build_timeline(xcum: Dict[int, float], bus_log_path: str):
     segments_by_bus: Dict[int, List[Dict]] = {}
     state: Dict[int, Dict] = {}
     t_min, t_max = None, None
 
-    if not os.path.exists(BUS_LOG):
+    if not os.path.exists(bus_log_path):
         return 0, 0, {}
 
-    with open(BUS_LOG, 'r', encoding='utf-8') as f:
+    with open(bus_log_path, 'r', encoding='utf-8') as f:
         for line in f:
             if 'INFO:root:' not in line:
                 continue
@@ -289,47 +290,86 @@ def build_timeline(xcum: Dict[int, float]):
     return t_min or 0, t_max or 0, segments_by_bus
 
 
+EP_RE = re.compile(r'^(?P<prefix>bus|pax)_epsisode(?P<ep>\d+)\.log$')
+
+
+def pick_episode(log_dir: str, episode: Optional[int]) -> int:
+    if episode is not None:
+        return episode
+    if not os.path.isdir(log_dir):
+        raise SystemExit(f'[ERR] log_dir not found: {log_dir}')
+
+    bus_eps = set()
+    pax_eps = set()
+    for name in os.listdir(log_dir):
+        m = EP_RE.match(name)
+        if not m:
+            continue
+        ep = int(m.group('ep'))
+        if m.group('prefix') == 'bus':
+            bus_eps.add(ep)
+        else:
+            pax_eps.add(ep)
+    common = sorted(bus_eps & pax_eps)
+    if not common:
+        raise SystemExit(f'[ERR] No matched bus/pax logs under: {log_dir}')
+    return common[-1]
+
+
 def main():
-    ensure_out_dir()
-    spacing_by_stop, xcum, stop_ids = read_spacing()
+    parser = argparse.ArgumentParser(description='Build web/data/*.json from simulation logs.')
+    parser.add_argument('--episode', type=int, default=None, help='Episode id to use (default: latest available).')
+    parser.add_argument('--log-dir', default=DEFAULT_LOG_DIR, help='Directory containing bus/pax logs.')
+    parser.add_argument('--spacing-csv', default=DEFAULT_SPACING_CSV, help='Path to spacing.csv.')
+    parser.add_argument('--out-dir', default=DEFAULT_OUT_DIR, help='Output directory (web/data).')
+    args = parser.parse_args()
+
+    episode = pick_episode(args.log_dir, args.episode)
+    bus_log_path = os.path.join(args.log_dir, f'bus_epsisode{episode}.log')
+    pax_log_path = os.path.join(args.log_dir, f'pax_epsisode{episode}.log')
+
+    ensure_out_dir(args.out_dir)
+    spacing_by_stop, xcum, stop_ids = read_spacing(args.spacing_csv)
     stations = [{
         'id': sid,
         'name': str(sid),
         'x': round(xcum[sid], 3),
         'spacing': float(spacing_by_stop.get(sid, 0.0)),
     } for sid in stop_ids]
-    with open(os.path.join(OUT_DIR, 'stations.json'), 'w', encoding='utf-8') as f:
+    with open(os.path.join(args.out_dir, 'stations.json'), 'w', encoding='utf-8') as f:
         json.dump({'stations': stations}, f, ensure_ascii=False)
 
-    bus_count, avg_kmh, duration_min = read_bus_stats()
-    pax_total = read_pax_lines()
-    pax_index, dwell_aggregate = build_pax_index()
+    bus_count, avg_kmh, duration_min = read_bus_stats(bus_log_path)
+    pax_total = read_pax_lines(pax_log_path)
+    pax_index, _dwell_aggregate = build_pax_index(pax_log_path)
     stats = {
+        'episode': episode,
         'bus_count': bus_count,
         'avg_speed_kmh': avg_kmh,
         'duration_min': duration_min,
         'total_pax': pax_total,
     }
-    with open(os.path.join(OUT_DIR, 'stats.json'), 'w', encoding='utf-8') as f:
+    with open(os.path.join(args.out_dir, 'stats.json'), 'w', encoding='utf-8') as f:
         json.dump(stats, f, ensure_ascii=False)
 
-    t_min, t_max, segs = build_timeline(xcum)
+    t_min, t_max, segs = build_timeline(xcum, bus_log_path)
     timeline = {
         't_min': t_min,
         't_max': t_max,
         'segments_by_bus': {str(k): v for k, v in segs.items()}
     }
-    with open(os.path.join(OUT_DIR, 'timeline.json'), 'w', encoding='utf-8') as f:
+    with open(os.path.join(args.out_dir, 'timeline.json'), 'w', encoding='utf-8') as f:
         json.dump(timeline, f, ensure_ascii=False)
 
     # 乘客索引单独输出
-    with open(os.path.join(OUT_DIR, 'pax_index.json'), 'w', encoding='utf-8') as f:
+    with open(os.path.join(args.out_dir, 'pax_index.json'), 'w', encoding='utf-8') as f:
         json.dump(pax_index, f, ensure_ascii=False)
 
-    print('[OK] Wrote:', os.path.join(OUT_DIR, 'stations.json'))
-    print('[OK] Wrote:', os.path.join(OUT_DIR, 'stats.json'))
-    print('[OK] Wrote:', os.path.join(OUT_DIR, 'timeline.json'))
-    print('[OK] Wrote:', os.path.join(OUT_DIR, 'pax_index.json'))
+    print(f'[OK] episode={episode}')
+    print('[OK] Wrote:', os.path.join(args.out_dir, 'stations.json'))
+    print('[OK] Wrote:', os.path.join(args.out_dir, 'stats.json'))
+    print('[OK] Wrote:', os.path.join(args.out_dir, 'timeline.json'))
+    print('[OK] Wrote:', os.path.join(args.out_dir, 'pax_index.json'))
 
 
 if __name__ == '__main__':

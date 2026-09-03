@@ -1,9 +1,6 @@
 from typing import Dict, Tuple
 
 from agent.agent import Agent
-from setup.homo_one_route_factory import Homo_One_Route_Components_Factory
-from setup.chengdu_factory import CD_Route3_Components_Factory
-from setup.guangzhou_brt_factory import GBRT_Components_Factory
 from setup.beijing_factory import Bj_Route57_Components_Factory
 from setup.factory import ComponentFactory
 from setup.blueprint import Blueprint
@@ -32,18 +29,9 @@ class Builder:
     def __init__(self, blueprint: Blueprint, agent: Agent) -> None:
         self._blueprint: Blueprint = blueprint
         self._agent: Agent = agent
-        if blueprint.env_name == 'homogeneous_one_route':
-            self._component_factory: ComponentFactory = Homo_One_Route_Components_Factory(
-                blueprint)
-        elif blueprint.env_name == 'cd_route_3':
-            self._component_factory: ComponentFactory = CD_Route3_Components_Factory(
-                blueprint)
-        elif blueprint.env_name == 'gbrt':
-            self._component_factory: ComponentFactory = GBRT_Components_Factory(
-                blueprint)
-        elif blueprint.env_name == 'bj_route_57':
-            self._component_factory: ComponentFactory = Bj_Route57_Components_Factory(
-                blueprint)
+        if blueprint.env_name != 'bj_route_57':
+            raise ValueError(f"Unsupported env_name: {blueprint.env_name}")
+        self._component_factory: ComponentFactory = Bj_Route57_Components_Factory(blueprint)
 
     def create_virtual_bus(self) -> VirtualBus:
         virtual_bus = self._component_factory.create_virtual_bus(

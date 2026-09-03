@@ -16,23 +16,25 @@ class DoNothing(Agent):
 
         return stop_bus_hold_time
 
-    def calculate_speed(self,length,current_time,last_enter_time,last_enter_speed,bus_id,route_id,avg_speed):
+    def calculate_speed(self, x_loc, stop_id, current_time, enter_time, enter_id, bus_id, route_id, last_deviation, enter_speed, length):
+        # fall back values if no predecessor info
+        avg_speed = enter_speed.get(bus_id, max(1e-6, length / max(1.0,  self._blueprint.route_schema.route_details_by_id[route_id].schedule_headway)))
         if bus_id == '1':
-            speed = avg_speed
-        else:
-            H = self._blueprint.route_schema.route_details_by_id[route_id].schedule_headway
-            h = current_time - last_enter_time
-            delay = H - h
-            try:
-                speed_ = length / (length / last_enter_speed + delay)
-            except ZeroDivisionError:
-                speed_ = avg_speed
-            if speed_ < 0:
-                speed_=avg_speed
-            elif speed_ > 16:
-                speed_ = avg_speed
-            speed = speed_
-        return speed
+            return avg_speed, 0.0
+        H = self._blueprint.route_schema.route_details_by_id[route_id].schedule_headway
+        last_bus_id = str(int(bus_id) - 1)
+        if last_bus_id not in enter_id:
+            return avg_speed, 0.0
+        h = current_time - enter_time[last_bus_id]
+        last_enter_speed = enter_speed[last_bus_id]
+        delay = H - h
+        try:
+            speed_ = length / (length / max(1e-6, last_enter_speed) + delay)
+        except ZeroDivisionError:
+            speed_ = avg_speed
+        if speed_ < 0 or speed_ > 16:
+            speed_ = avg_speed
+        return speed_, delay
 
     def reset(self, episode: int):
         pass

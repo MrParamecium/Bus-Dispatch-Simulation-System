@@ -4,8 +4,12 @@ from collections import defaultdict
 import matplotlib.pyplot as plt
 
 from dataclasses import dataclass
+from pathlib import Path
 import os
 import logging
+
+OUTPUT_DIR = Path(__file__).resolve().parents[1] / 'outputs'
+LOG_DIR = OUTPUT_DIR / 'log'
 
 @dataclass
 class TrajectoryPoint:
@@ -85,10 +89,11 @@ def plot_time_space_diagram(buses, save_root=None, show=True, episide:int=0):
 
 
 def save_bus_info(buses, episide:int=0):
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,
         handlers=[
-            logging.FileHandler(f"outputs/log/bus_epsisode{episide}.log", mode='w', encoding="utf-8"),
+            logging.FileHandler(str(LOG_DIR / f"bus_epsisode{episide}.log"), mode='w', encoding="utf-8"),
         ],
         force=True  # Python 3.8+
     )
@@ -99,10 +104,11 @@ def save_bus_info(buses, episide:int=0):
 
 
 def save_pax_info(paxs, episide:int=0):
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,
         handlers=[
-            logging.FileHandler(f"outputs/log/pax_epsisode{episide}.log", mode='w', encoding="utf-8"),
+            logging.FileHandler(str(LOG_DIR / f"pax_epsisode{episide}.log"), mode='w', encoding="utf-8"),
         ],
         force=True  # Python 3.8+
     )

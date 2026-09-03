@@ -1,5 +1,5 @@
 /*
-  Episode50 可视化：
+  日志可视化：
   - 读取 web/data/*.json
   - 使用高德地图绘制路线与站点
   - 已移除前端车辆运行/动画逻辑
@@ -83,7 +83,6 @@ function initMap() {
     zoom: 12,
     center: DEFAULT_ROUTE[0],
     viewMode: '3D',
-    mapStyle: 'amap://styles/dark'
   });
 
   // 悬浮信息窗口
@@ -95,9 +94,9 @@ function initMap() {
   state.polyline = new AMap.Polyline({
     path: DEFAULT_ROUTE,
     isOutline: true,
-    outlineColor: '#0a4f33',
+    outlineColor: '#93c5fd',
     borderWeight: 2,
-    strokeColor: '#16a34a', // 绿色
+    strokeColor: '#2563eb', // 蓝色（更接近白底地图风格）
     strokeOpacity: 1,
     strokeWeight: 8,
     lineCap: 'round',
@@ -140,49 +139,26 @@ function drawStationsOnRoute() {
   const stopPositions = [];
   const stopNames = [];
   const addCircleStop = (lnglat, name) => {
-    // 最外层：白色环
-    const cOuter = new AMap.CircleMarker({
+    // 白底地图：用「白心 + 蓝边」的站点点位，更接近常见地图线路展示
+    const dot = new AMap.CircleMarker({
       center: lnglat,
-      radius: 4.8,
-      strokeColor: '#ffffff',
+      radius: 4.2,
+      strokeColor: '#2563eb',
       strokeWeight: 2.4,
       strokeOpacity: 1,
       fillColor: '#ffffff',
-      fillOpacity: 0,
-      zIndex: 90,
-    });
-    cOuter.setExtData && cOuter.setExtData({ kind: 'circle' });
-    // 次外层：黑色环
-    const cMid = new AMap.CircleMarker({
-      center: lnglat,
-      radius: 3.52,
-      strokeColor: '#000000',
-      strokeWeight: 1.6,
-      strokeOpacity: 1,
-      fillColor: '#000000',
-      fillOpacity: 0,
-      zIndex: 91,
-    });
-    cMid.setExtData && cMid.setExtData({ kind: 'circle' });
-    // 最内层：白色实心圆
-    const cInner = new AMap.CircleMarker({
-      center: lnglat,
-      radius: 2.4,
-      strokeColor: '#ffffff',
-      strokeWeight: 1.6,
-      strokeOpacity: 1,
-      fillColor: '#ffffff',
       fillOpacity: 1,
-      zIndex: 92,
+      zIndex: 90,
+      bubble: true,
     });
-    cInner.setExtData && cInner.setExtData({ kind: 'circle' });
-    state.stationMarkers.push(cOuter, cMid, cInner);
+    dot.setExtData && dot.setExtData({ kind: 'circle' });
+    state.stationMarkers.push(dot);
     if (name) {
       const text = new AMap.Text({
         text: name,
         anchor: 'middle-left',
         position: lnglat,
-        style: { 'background-color': 'transparent', 'border': 'none', 'color': '#e5e7eb', 'font-size': '12px', 'text-shadow': '0 1px 2px rgba(0,0,0,.6)' },
+        style: { 'background-color': 'transparent', 'border': 'none', 'color': '#0f172a', 'font-size': '12px', 'text-shadow': '0 1px 2px rgba(255,255,255,.95)' },
         zIndex: 93,
         offset: new AMap.Pixel(8, -12)
       });
@@ -398,6 +374,26 @@ function headingAlongPolyline(path, dist, totalLen) {
   return angleFromLngLat(p0, p1);
 }
 
+// 在屏幕像素坐标系下计算路线切向的朝向角度（度，顺时针为正，0° 向右）
+function headingAlongPolylinePx(map, path, dist, totalLen) {
+  const EPS = 3;
+  const d0 = Math.max(0, Math.min(dist, totalLen));
+  const d1 = Math.max(0, Math.min(totalLen, d0 + EPS));
+  const p0 = projectDistanceToPolyline(path, d0, totalLen);
+  const p1 = projectDistanceToPolyline(path, d1, totalLen);
+  if (!p0 || !p1 || !map || !map.lngLatToContainer) return headingAlongPolyline(path, dist, totalLen);
+  try {
+    const c0 = map.lngLatToContainer(new AMap.LngLat(p0[0], p0[1]));
+    const c1 = map.lngLatToContainer(new AMap.LngLat(p1[0], p1[1]));
+    if (!c0 || !c1) return headingAlongPolyline(path, dist, totalLen);
+    const dx = (c1.x - c0.x);
+    const dy = (c1.y - c0.y); // 向下为正
+    return Math.atan2(dy, dx) * 180 / Math.PI;
+  } catch(_) {
+    return headingAlongPolyline(path, dist, totalLen);
+  }
+}
+
 function parsePolyline(polyline) {
   // "lng,lat;lng,lat;..."
   if (!polyline) return [];
@@ -483,7 +479,8 @@ function createOrUpdateBusMarker(bus) {
   const pos = projectDistanceToPolyline(state.routeLngLats, clampedX, totalLen);
   if (pos) mk.setPosition(pos);
   // 更新朝向：计算 polyline 切向角度（度），并旋转 HTML 内容
-  const deg = headingAlongPolyline(state.routeLngLats, clampedX, totalLen);
+  // 优先用屏幕坐标的朝向，避免经纬度投影带来的偏差
+  const deg = headingAlongPolylinePx(state.map, state.routeLngLats, clampedX, totalLen);
   if (typeof mk.setAngle === 'function') {
     try { mk.setAngle(deg); } catch (_) {}
   }
@@ -800,22 +797,32 @@ function renderTimelineFrame() {
       presentIds.add(String(busId));
       if (busListEl && !freezeBus) {
         const li = document.createElement('li');
-        li.className = 'bus-item';
+        li.className = 'bus-item bus-item--bus';
         const statusText = bus.status === 'dwelling_at_stop' ? '停靠' : (bus.status === 'holding' ? '等待' : '行驶');
-         const speed = (typeof bus.v_kmh_inst === 'number') ? bus.v_kmh_inst : (bus.v_kmh || 0);
-         const speedFmt = (Number.isFinite(speed) ? (Math.round(speed * 10) / 10).toFixed(1) : '0.0');
-        // 直接展示 bus.x（已是从起点累计距离）
+        const badgeClass = bus.status === 'dwelling_at_stop'
+          ? 'stop'
+          : (bus.status === 'holding' ? 'hold' : 'run');
+        const speed = (typeof bus.v_kmh_inst === 'number') ? bus.v_kmh_inst : (bus.v_kmh || 0);
+        const speedFmt = (Number.isFinite(speed) ? (Math.round(speed * 10) / 10).toFixed(1) : '0.0');
         const distFromStart = Math.max(0, bus.x);
-        const parts = [
-          `<div class=\"num\">Bus ${bus.id}</div>`,
-          bus.terminal ? `<div>状态：已到达终点站</div>` : `<div>状态：${statusText}</div>`,
-           `<div>速度：${speedFmt} km/h</div>`,
-          `<div>距离：${Math.round(distFromStart)} m</div>`,
-          (typeof bus.pax_onboard === 'number') ? `<div>车内：${bus.pax_onboard} 人</div>` : '',
-          (bus.status === 'dwelling_at_stop' && typeof bus.pax_on === 'number') ? `<div>上车：${bus.pax_on} 人</div>` : '',
-          (bus.status === 'dwelling_at_stop' && typeof bus.pax_off === 'number') ? `<div>下车：${bus.pax_off} 人</div>` : ''
-        ].filter(Boolean).join('');
-        li.innerHTML = `<div class=\"meta\">${parts}</div>`;
+        const kvs = [
+          { k: '距离', v: `${Math.round(distFromStart)} m` },
+          { k: '速度', v: `${speedFmt} km/h` },
+        ];
+        if (typeof bus.pax_onboard === 'number') kvs.push({ k: '车内', v: `${bus.pax_onboard} 人` });
+        if (bus.status === 'dwelling_at_stop' && typeof bus.pax_on === 'number') kvs.push({ k: '上车', v: `${bus.pax_on} 人` });
+        if (bus.status === 'dwelling_at_stop' && typeof bus.pax_off === 'number') kvs.push({ k: '下车', v: `${bus.pax_off} 人` });
+        li.innerHTML = `
+          <div class="item-head">
+            <div class="item-title">
+              <span class="num">Bus ${bus.id}</span>
+              <span class="badge ${badgeClass}">${statusText}</span>
+            </div>
+          </div>
+          <div class="kv-grid">
+            ${kvs.map(({k, v}) => `<div class="kv"><span class="k">${k}</span><span class="v">${v}</span></div>`).join('')}
+          </div>
+        `;
         if (bus.terminal) arrivedBuses.push(li); else busListEl.appendChild(li);
       }
     } else if (busListEl && !freezeBus) {
@@ -828,13 +835,32 @@ function renderTimelineFrame() {
         if (t1 > lastT) lastT = t1;
       }
       const li = document.createElement('li');
-      li.className = 'bus-item';
+      li.className = 'bus-item bus-item--bus';
       const idText = Number.isFinite(parseInt(busId, 10)) ? parseInt(busId, 10) : busId;
       if (tNow < firstT) {
-        li.innerHTML = `<div class="meta"><div class="num">Bus ${idText}</div><div>状态：未发车</div><div>速度：0 km/h</div><div>距离：0 m</div></div>`;
+        li.innerHTML = `
+          <div class="item-head">
+            <div class="item-title">
+              <span class="num">Bus ${idText}</span>
+              <span class="badge pending">未发车</span>
+            </div>
+          </div>
+          <div class="kv-grid">
+            <div class="kv"><span class="k">距离</span><span class="v">0 m</span></div>
+            <div class="kv"><span class="k">速度</span><span class="v">0.0 km/h</span></div>
+          </div>
+        `;
         busListEl.appendChild(li);
       } else if (tNow >= lastT) {
-        li.innerHTML = `<div class="meta"><div class="num">Bus ${idText}</div><div>状态：已到达终点站</div></div>`;
+        li.innerHTML = `
+          <div class="item-head">
+            <div class="item-title">
+              <span class="num">Bus ${idText}</span>
+              <span class="badge arrived">到达终点</span>
+            </div>
+          </div>
+          <div class="item-sub muted">该车辆已完成全程运行</div>
+        `;
         arrivedBuses.push(li);
       }
     }
@@ -862,11 +888,26 @@ function renderTimelineFrame() {
       const s = byStop[String(logicalIdx)] || byStop[logicalIdx] || { arrivals: [], boards: [] };
       const arrs = Array.isArray(s.arrivals) ? s.arrivals : [];
       const brds = Array.isArray(s.boards) ? s.boards : [];
-      const waiting = Math.max(0, arrs.filter(t => t <= tNow).length - brds.filter(t => t <= tNow).length);
+      const arrived = arrs.filter(t => t <= tNow).length;
+      const boarded = brds.filter(t => t <= tNow).length;
+      const waiting = Math.max(0, arrived - boarded);
       if (!freezeStop) {
         const li = document.createElement('li');
-        li.className = 'bus-item';
-        li.innerHTML = `<div class="meta"><div class="num">站点 ${logicalIdx}</div><div>等待：${waiting} 人</div></div>`;
+        li.className = 'bus-item bus-item--stop';
+        const badge = waiting >= 20 ? 'arrived' : (waiting >= 5 ? 'stop' : 'run');
+        li.innerHTML = `
+          <div class="item-head">
+            <div class="item-title">
+              <span class="num">站点 ${logicalIdx}</span>
+              <span class="badge ${badge}">等待</span>
+            </div>
+            <div class="mono">${waiting} 人</div>
+          </div>
+          <div class="kv-grid">
+            <div class="kv"><span class="k">累计到达</span><span class="v">${arrived}</span></div>
+            <div class="kv"><span class="k">累计上车</span><span class="v">${boarded}</span></div>
+          </div>
+        `;
         stopListEl.appendChild(li);
       }
     }
@@ -1054,10 +1095,39 @@ function updateStatsPanel() {
     const el = $(id);
     if (el) el.innerText = String(v != null ? v : '-');
   };
+  const epEl = $('episodeText');
+  if (epEl) epEl.innerText = `Episode ${s.episode != null ? s.episode : '-'}`;
   setText('statBus', s.bus_count);
   setText('statSpeed', s.avg_speed_kmh);
   setText('statPax', s.total_pax);
   setText('statDuration', s.duration_min);
+}
+
+function bindInfoTabs() {
+  const leftPanel = document.getElementById('leftPanel');
+  const tabBus = document.getElementById('tabBus');
+  const tabStop = document.getElementById('tabStop');
+  const busCard = document.getElementById('busCard');
+  const stopCard = document.getElementById('stopCard');
+  if (!leftPanel || !tabBus || !tabStop || !busCard || !stopCard) return;
+
+  const setInfoTab = (tab) => {
+    const isBus = tab === 'bus';
+    leftPanel.dataset.info = isBus ? 'bus' : 'stop';
+    tabBus.classList.toggle('is-active', isBus);
+    tabStop.classList.toggle('is-active', !isBus);
+    tabBus.setAttribute('aria-selected', String(isBus));
+    tabStop.setAttribute('aria-selected', String(!isBus));
+    // 双保险：直接控制显示，避免样式缓存导致的展示错误
+    busCard.style.display = isBus ? 'flex' : 'none';
+    stopCard.style.display = isBus ? 'none' : 'flex';
+  };
+
+  tabBus.addEventListener('click', (e) => { e.preventDefault(); setInfoTab('bus'); });
+  tabStop.addEventListener('click', (e) => { e.preventDefault(); setInfoTab('stop'); });
+
+  // 初始化：优先读取 data-info，否则默认 bus
+  setInfoTab(leftPanel.dataset.info === 'stop' ? 'stop' : 'bus');
 }
 
 async function bootstrap() {
@@ -1205,22 +1275,27 @@ async function bootstrap() {
     window.addEventListener('mouseup', () => { dragging = false; document.body.style.userSelect = ''; });
     window.addEventListener('mousemove', (e) => {
       if (!dragging) return;
-      // 拖拽的是侧栏内部的分隔条：在 车辆 与 站点 卡片之间伸缩
-      const firstCard = leftPanel.querySelector('.card');
-      if (!firstCard) return;
-      const rect = leftPanel.getBoundingClientRect();
-      const minH = 120; // 车辆卡片最小高度
-      const maxH = Math.max(minH, leftPanel.clientHeight - 160);
-      const newH = Math.max(minH, Math.min(maxH, e.clientY - rect.top));
-      firstCard.style.height = `${newH}px`;
-      firstCard.style.overflow = 'auto';
-      const stopCard = leftPanel.querySelectorAll('.card')[1];
-      if (stopCard) stopCard.style.overflow = 'auto';
+      // 拖拽的是侧栏内部的分隔条：在「车辆信息」与「站点信息」卡片之间伸缩
+      const busCard = leftPanel.querySelector('.card.bus-card');
+      if (!busCard) return;
+      const statsCard = leftPanel.querySelector('.card.stats-card');
+      const busRect = busCard.getBoundingClientRect();
+      const minH = 160;
+      const stopMinH = 180;
+      const statsH = statsCard ? statsCard.getBoundingClientRect().height : 0;
+      const maxH = Math.max(minH, leftPanel.clientHeight - statsH - stopMinH - 48);
+      const newH = Math.max(minH, Math.min(maxH, e.clientY - busRect.top));
+      busCard.style.height = `${newH}px`;
+      const stopCard = leftPanel.querySelector('.card.stop-card');
+      if (stopCard) stopCard.style.overflow = 'hidden';
     });
   }
 }
 
-window.addEventListener('DOMContentLoaded', bootstrap);
+window.addEventListener('DOMContentLoaded', () => {
+  bindInfoTabs();
+  bootstrap();
+});
 
 
 

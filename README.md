@@ -1,19 +1,10 @@
-# EXACT: EXperimental Adaptive Control Testbed for Transit
+# EXACT: EXperimental Adaptive Control Testbed for Transit (Slim)
 
-This repository hosts a simulation testbed that serves as an environment for developing and benchmarking various dynamic bus holding strategies. It supports the research presented in the paper *"An Extensible Python Open-Source Simulation Platform for Developing and Benchmarking Bus Holding Strategies"* ([link to paper](https://ieeexplore.ieee.org/document/10720165)).
-
-Users can customize any holding strategy within the platform, whether model-based or utilizing model-free Reinforcement Learning (RL), by creating a class that fulfills the basic requirements of the exposed API.
-
-The platform currently provides two real-world datasets: Route No.3 in Chengdu, China, and a portion of the Guangzhou Bus Rapid Transit (BRT) corridor. The Chengdu Route 3 environment features high passenger demand and frequent dispatching, while the Guangzhou BRT environment offers a multi-line operation setting where queueing is commonly observed at stops. Users also have the flexibility to customize their own environment using their datasets, enabling the testing and evaluation of holding strategies across a wide range of scenarios.
-
-For the control agent, we have currently furnished several control methods proposed in the literature:
-
-- Model-based control strategies
-  - `Forward Headway Control` proposed in Daganzo (2009).
-  - `Simple Control` proposed in Xuan et al., (2011).
-- Model-free RL control strategies:
-  - Target-headway-based control proposed in Alesiani and Gkiotsalitis (2018).
-  - Event-graph-based control proposed in Wang and Sun (2021).
+This is a slimmed version that keeps:
+- `Do_Nothing` baseline
+- `Naive_DDPG` (RL)
+- Beijing Route 57 dataset (`bj_route_57`)
+- the front-end visualizer under `web/`
 
 # Environment setup
 
@@ -32,31 +23,27 @@ The following steps will guide you through the process of setting up the environ
  pip install -r requirements.txt
 ```
 
-# Running Built-in Control Methods and Datasets
+# Run simulation
 
-## **Configure the Algorithm and Simulation Environment**:
+## Configure
 
-Specify the control algorithm and simulation environment in the `config.yaml` file.
+Edit `busoperation/config.yaml`:
+- `running_agent`: `Do_Nothing` or `Naive_DDPG`
 
-## **Run the Simulation**:
-
-After specifying the control agent and its associated parameters in the `config.yaml` file, run the main function through the terminal:
+## Run
 
 ```bash
-python main.py
+python3 busoperation/main.py
 ```
 
-# Customizing Your Own Environment
+# Web visualizer
 
-- Prepare your own dataset, including each route's station information, dispatch frequency, passenger demand (OD), and travel time between stations.
+```bash
+python3 web/build_data.py
+python3 -m http.server 8080 --directory web
+```
 
-- Inherit the class **Network** and implement the provided methods to create a bus network with the route(s)'s information specified.
-
-- Implement the `Components_Factory` protocol and then add it to the `Builder` class. This factory will create the related components used in the simulation, including terminals, stops, links, and a holder.
-
-# Customizing Your Own RL Algorithm
-
-Inherit the `RLAgent` class from the `rl_agent` module and implement your specific algorithm in the `calculate_hold_time`. This function will provide you the `snapshot` that record all potentially required states, including bus ID, route ID, number of passengers (pax_num), location relative to the terminal (loc_relative_to_terminal), and etc.
+Then open `http://localhost:8080/`.
 
 # References
 [1] Daganzo, C. F., 2009. A headway-based approach to eliminate bus bunching: Systematic analysis and comparisons. Transportation Research Part B: Methodological 43 (10), 913–921.
@@ -70,4 +57,3 @@ Inherit the `RLAgent` class from the `rl_agent` module and implement your specif
 # For any questions, feel free to contact us via
 
 [1221201Z5005@smail.swufe.edu.cn](mailto:1221201Z5005@smail.swufe.edu.cn) or [shenminyu@swufe.edu.cn](mailto:shenminyu@swufe.edu.cn)
-

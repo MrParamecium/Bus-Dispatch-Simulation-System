@@ -2,7 +2,6 @@ from abc import ABC, abstractmethod
 from typing import TypeVar, Dict, Tuple
 
 import networkx as nx
-import matplotlib.pyplot as plt
 
 from setup.config_dataclass import StopNodeGeometry, TerminalNodeGeometry, LinkGeometry, LinkDistribution
 T = TypeVar("T", bound="Network")
@@ -122,6 +121,7 @@ class Network(ABC):
         return link_distribution
 
     def visualize(self) -> None:
+        import matplotlib.pyplot as plt  # defer heavy import
         # fig, ax = plt.subplots()
         # # draw the nodes
         # pos = self._name_coordinates

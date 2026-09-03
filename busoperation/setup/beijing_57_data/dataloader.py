@@ -1,17 +1,17 @@
-import pickle
-import pandas as pd
-from scipy.stats import norm
+from pathlib import Path
 from copy import deepcopy
-import pandas as pd
-import os
 from ast import literal_eval
+
+import pandas as pd
+
+DATA_DIR = Path(__file__).resolve().parent
 
 
 class DataLoader:
     def __init__(self) -> None:
-        self.station_list = pd.read_table(r'setup/beijing_57_data/station_list.txt')
-        self.tt_data = pd.read_excel(r'setup/beijing_57_data/distribution.xlsx')
-        self.spacing_data = pd.read_excel('setup/beijing_57_data/spacing.xlsx')
+        self.station_list = pd.read_table(DATA_DIR / 'station_list.txt')
+        self.tt_data = pd.read_excel(DATA_DIR / 'distribution.xlsx')
+        self.spacing_data = pd.read_excel(DATA_DIR / 'spacing.xlsx')
 
     # @property
     # def trip_times(self):

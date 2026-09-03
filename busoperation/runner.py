@@ -1,9 +1,12 @@
 from collections import defaultdict
+from pathlib import Path
 from typing import Dict, Tuple, List
 
 import numpy as np
-import wandb
-import os
+try:
+    import wandb  # type: ignore
+except Exception:  # wandb is optional; disable recording if unavailable
+    wandb = None  # type: ignore
 from agent.agent import Agent
 from agent.rl.rl_agent import RLAgent
 from setup.blueprint import Blueprint
@@ -12,6 +15,9 @@ from simulator.trajectory import plot_time_space_diagram,save_pax_info,save_bus_
 
 import logging
 
+OUTPUT_DIR = Path(__file__).resolve().parent / 'outputs'
+WEIGHTS_DIR = OUTPUT_DIR / 'weights'
+IMAGES_DIR = OUTPUT_DIR / 'images'
 
 def run(blueprint: Blueprint, agent: Agent, run_config: Dict, record_config: Dict) -> Tuple[Dict[str, float], Dict[str, List[float]]]:
     ''' Run the simulation for multiple episodes and return the metrics
@@ -31,6 +37,8 @@ def run(blueprint: Blueprint, agent: Agent, run_config: Dict, record_config: Dic
 
     '''
     is_record = True if len(record_config) > 0 else False
+    if is_record and wandb is None:
+        is_record = False
     if is_record:
         wandb_project_name = record_config['wandb_config']['wandb_project_name']
         wandb.init(project=wandb_project_name, config=record_config)
@@ -77,11 +85,9 @@ def run(blueprint: Blueprint, agent: Agent, run_config: Dict, record_config: Dic
         agent.reset(epsisode)
         if epsisode % 3 == 0:
 
-            if not os.path.exists('outputs/weights'):
-                os.makedirs('outputs/weights', exist_ok=True)
-            if not os.path.exists('outputs/images'):
-                os.makedirs('outputs/images', exist_ok=True)
-            plot_time_space_diagram(simulator.total_buses, save_root="outputs/images", show=False, episide=epsisode)
+            WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
+            IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+            plot_time_space_diagram(simulator.total_buses, save_root=str(IMAGES_DIR), show=False, episide=epsisode)
             save_bus_info(simulator.total_buses, episide=epsisode)
             save_pax_info(simulator._left_paxs, episide=epsisode)
 
@@ -89,7 +95,8 @@ def run(blueprint: Blueprint, agent: Agent, run_config: Dict, record_config: Dic
             # plot_time_space_diagram(simulator.total_buses)
             # save the model if the agent is an RL agent and it is training
             if isinstance(agent, RLAgent) and agent.is_train:
-                agent.save_net(path='actor_net.pth')
+                WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
+                agent.save_net(path=str(WEIGHTS_DIR / 'actor_net.pth'))
             # for bus in simulator.total_buses:
             #     print(bus.bus_id,bus.bus_log.stop_link_speed) # 打印车辆速度和停留时间
             #     print(bus.bus_id, bus.bus_log.stop_dwell_time)

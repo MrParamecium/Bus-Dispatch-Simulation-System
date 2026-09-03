@@ -1,5 +1,6 @@
 from collections import defaultdict
 from typing import List, Dict, Tuple
+from pathlib import Path
 from typing_extensions import override
 
 
@@ -10,6 +11,8 @@ from .config_dataclass import *
 from .utils import print_od_table, sum_entries, sum_entries_with_row_sums
 import pandas as pd
 import numpy as np
+
+DATA_DIR = Path(__file__).resolve().parent / 'beijing_57_data'
 
 data_loader = DataLoader()
 node_ids = data_loader.node_ids
@@ -82,7 +85,7 @@ class BJ_route_57_Route_Schema(Route_Schema):
     @override
     def _define_od_table(self) -> Dict[str, Dict[str, Dict[str, float]]]:
         # we assume that alighting follows a uniform distribution
-        od=pd.read_csv('setup/beijing_57_data/57路早高峰OD分布.csv', index_col=0)
+        od = pd.read_csv(DATA_DIR / '57路早高峰OD分布.csv', index_col=0)
         # 提取上三角部分（不含对角线）
         upper_triangle = pd.DataFrame(
             np.triu(od.values, k=1),

@@ -3,17 +3,21 @@
    <script src="https://webapi.amap.com/maps?v=2.0&key=你的Key"></script>
    获取方式：高德开放平台控制台创建 Web JS 应用。
 
-2) 生成可视化数据（已生成）：
-   python3 web/build_data.py --sample-every 1
+2) 运行仿真生成日志（busoperation/outputs/log）：
+   python3 busoperation/main.py
+
+3) 生成可视化数据（默认自动选择最新 episode，也可手动指定）：
+   python3 web/build_data.py
+   python3 web/build_data.py --episode 0
    输出位于 web/data/ 目录。
 
-3) 启动本地静态服务器（端口 8080）：
+4) 启动本地静态服务器（端口 8080）：
    python3 -m http.server 8080 --directory web
    然后打开浏览器访问： http://localhost:8080/
 
 页面说明：
 - 左侧高德地图显示路线与站点，蓝/粉线为线路。
-- 车辆图标根据 frames.json 在 polyline 上移动；停站时状态为“停靠”。
+- 车辆运行按 timeline.json 的日志时间线驱动；停站时状态为“停靠/holding”。
 - 右侧显示统计指标与部分车辆状态列表。
 - 播放控制：播放/暂停与速度调节（0.25x~5x）。
 

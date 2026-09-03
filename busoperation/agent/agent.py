@@ -1,7 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Dict, Tuple, Any, List, Literal
 
-from agent.rl.helper import find_for_and_backward_buses
 from simulator.snapshot import Snapshot
 from simulator.virtual_bus import VirtualBus
 
@@ -69,8 +68,23 @@ class Agent(ABC):
         bus_id_loc: Dict[str, float] = {}
         for (route_id, bus_id), bus_snapshot in snapshot.bus_snapshots.items():
             bus_id_loc[bus_id] = bus_snapshot.loc_relative_to_terminal
-        forward_bus_id, forward_spacing, backward_bus_id, backward_spacing = find_for_and_backward_buses(
-            bus_id_loc, curr_bus_id)
+
+        # Lightweight inline: find forward/backward nearest buses by location
+        curr_loc = bus_id_loc[curr_bus_id]
+        forward_bus_id = None
+        forward_spacing = float('inf')
+        backward_bus_id = None
+        backward_spacing = float('inf')
+        for bus_id, loc in bus_id_loc.items():
+            if bus_id == curr_bus_id:
+                continue
+            diff = loc - curr_loc
+            if diff > 0 and diff < forward_spacing:
+                forward_bus_id = bus_id
+                forward_spacing = diff
+            elif diff < 0 and abs(diff) < backward_spacing:
+                backward_bus_id = bus_id
+                backward_spacing = abs(diff)
 
         return forward_bus_id, forward_spacing, backward_bus_id, backward_spacing
 

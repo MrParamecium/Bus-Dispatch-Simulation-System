@@ -1,6 +1,7 @@
 from copy import deepcopy
 from collections import deque, defaultdict
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, Tuple, Optional, List
 import random
 import numpy as np
@@ -13,6 +14,8 @@ from simulator.simulator import Simulator
 
 from .rl_agent import RLAgent
 from .net import Actor_Net, Critic_Net
+
+DEFAULT_ACTOR_NET_PATH = Path(__file__).resolve().parents[2] / 'outputs' / 'weights' / 'actor_net.pth'
 
 
 @dataclass(frozen=True)
@@ -45,7 +48,8 @@ class Naive_DDPG(RLAgent):
         self._state_size = agent_config['state_size']
         if not agent_config['is_train']:
             # evaluation mode
-            self.load_net(path='actor_net.pth')
+            model_path = agent_config.get('actor_net_path', str(DEFAULT_ACTOR_NET_PATH))
+            self.load_net(path=model_path)
         else:
             # training mode
             self._critic_net = Critic_Net(

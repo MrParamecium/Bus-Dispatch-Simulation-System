@@ -1,12 +1,10 @@
-from typing import Dict, Tuple, Literal
+from typing import Dict, Tuple, Literal, TYPE_CHECKING
 from collections import defaultdict
 
-from .homo_one_route import Homo_One_Route_Network, Homo_One_Route_Route_Schema
-from .chengdu import CD_Route3_Network, CD_Route3_Route_Schema
-from .guangzhou_brt import GBRT_Network, GBRT_Route_Schema
-from .beijing import BJ_route_57_Network,BJ_route_57_Route_Schema
-from .network import Network
-from .route import Route_Schema
+if TYPE_CHECKING:
+    # Only import for typing to avoid heavy runtime imports
+    from .network import Network
+    from .route import Route_Schema
 
 
 class Blueprint:
@@ -21,19 +19,12 @@ class Blueprint:
 
     def __init__(self, env_name: str) -> None:
         self.env_name: str = env_name
-        if env_name == 'homogeneous_one_route':
-            self.network: Network = Homo_One_Route_Network()
-            self.route_schema: Route_Schema = Homo_One_Route_Route_Schema()
-        elif self.env_name == 'cd_route_3':
-            self.network: Network = CD_Route3_Network()
-            self.route_schema: Route_Schema = CD_Route3_Route_Schema()
-        elif self.env_name == 'gbrt':
-            self.network: Network = GBRT_Network()
-            self.route_schema: Route_Schema = GBRT_Route_Schema()
-
-        elif self.env_name == 'bj_route_57':
-            self.network: Network = BJ_route_57_Network()
-            self.route_schema: Route_Schema = BJ_route_57_Route_Schema()
+        if self.env_name == 'bj_route_57':
+            from .beijing import BJ_route_57_Network, BJ_route_57_Route_Schema
+            self.network = BJ_route_57_Network()
+            self.route_schema = BJ_route_57_Route_Schema()
+        else:
+            raise ValueError(f"Unsupported env_name: {self.env_name}")
 
         # _route_node_to_link: used for querying next link for current node
         # _route_link_to_node: used for querying next node for current link
